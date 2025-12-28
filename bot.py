@@ -1,11 +1,11 @@
 # bot.py – телеграм-бот @City_Key_Bot
 import telebot, requests, bs4, datetime, sqlite3, os
+from telebot import types
 
 TOKEN = '8180365248:AAF3M70ndMKw6zMWEIDcOHmaqupgmEx8Uwk'
 bot = telebot.TeleBot(TOKEN)
 DB_NAME = 'stats.db'
 
-# ---------- база даних ----------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -24,7 +24,6 @@ def count_users():
     conn.close()
     return starters, subs
 
-# ---------- гороскоп ----------
 def get_horoscope(sign: str) -> str:
     slug = {'aries': 'horoskop-oven', 'taurus': 'horoskop-telec', 'gemini': 'horoskop-bliznyu',
             'cancer': 'horoskop-rak', 'leo': 'horoskop-lev', 'virgo': 'horoskop-diva',
@@ -42,7 +41,6 @@ def get_horoscope(sign: str) -> str:
         pass
     return 'Гороскоп оновлюється.'
 
-# ---------- клавіатура ----------
 SIGNS_UA = ['♈ Овен', '♉ Тілець', '♊ Близнюки', '♋ Рак', '♌ Лев', '♍ Діва',
             '♎ Терези', '♏ Скорпіон', '♐ Стрілець', '♑ Козеріг', '♒ Водолій', '♓ Риби']
 
@@ -51,7 +49,6 @@ def kb():
     mk.add(*[telebot.types.KeyboardButton(s) for s in SIGNS_UA])
     return mk
 
-# ---------- handlers ----------
 @bot.message_handler(commands=['start'])
 def start(m):
     conn = sqlite3.connect(DB_NAME)
@@ -85,6 +82,15 @@ def sub_save(m):
         conn.commit()
         conn.close()
         bot.send_message(m.chat.id, f'🔔 Підписку на {m.text[:2]} активовано! Щоранку о 08:00 отримаєш гороскоп.', reply_markup=kb())
+
+@bot.message_handler(commands=['unsubscribe'])
+def unsub(m):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('DELETE FROM subs WHERE user_id = ?', (m.from_user.id,))
+    conn.commit()
+    conn.close()
+    bot.send_message(m.chat.id, '🔕 Ви відписались від усіх сповіщень. Натисніть /subscribe, щоб підписатись знову.', reply_markup=kb())
 
 @bot.message_handler(func=lambda m: m.text in SIGNS_UA)
 def show_horo(m):
