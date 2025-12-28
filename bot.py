@@ -23,7 +23,7 @@ def get_horoscope(sign: str) -> str:
         h3 = soup.find('h3')
         if h3:
             txt = ' '.join(p.get_text(strip=True) for p in h3.find_all_next('p')[:4])
-            return txt[:600]
+            return txt[:1200]
     except:
         pass
     return 'Гороскоп оновлюється.'
@@ -57,4 +57,5 @@ def show_horo(m):
 # --- запуск ---
 if __name__ == '__main__':
     print('Bot started')
+
     bot.infinity_polling()
