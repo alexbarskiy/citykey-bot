@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sqlite3, requests, bs4, os, telebot
 
-TOKEN   = os.getenv('TOKEN')          # беремо з змінної середовища Railway
+TOKEN   = os.getenv('TOKEN')          # змінна середовища Railway
 DB_NAME = 'stats.db'
 bot     = telebot.TeleBot(TOKEN)
 
