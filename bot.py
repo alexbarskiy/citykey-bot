@@ -1,24 +1,30 @@
-# bot.py – телеграм-бот @City_Key_Bot
-import os, datetime, sqlite3
-import telebot, requests, bs4
+# bot.py
+import os
+import telebot, requests, bs4, datetime, sqlite3
 from telebot import types
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN")  # Railway Variables
 if not TOKEN:
-    raise RuntimeError("TOKEN is not set in environment variables")
+    raise RuntimeError("ENV TOKEN is missing. Add TOKEN in Railway -> Variables.")
 
 bot = telebot.TeleBot(TOKEN)
 DB_NAME = "stats.db"
 
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS subs
-                 (user_id INTEGER, sign TEXT, PRIMARY KEY (user_id, sign))""")
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS users
+           (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT)"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS subs
+           (user_id INTEGER, sign TEXT, PRIMARY KEY (user_id, sign))"""
+    )
     conn.commit()
     conn.close()
+
 
 def count_users():
     conn = sqlite3.connect(DB_NAME)
@@ -27,6 +33,7 @@ def count_users():
     subs = c.execute("SELECT COUNT(DISTINCT user_id) FROM subs").fetchone()[0]
     conn.close()
     return starters, subs
+
 
 def get_horoscope(sign: str) -> str:
     slug = {
@@ -54,17 +61,31 @@ def get_horoscope(sign: str) -> str:
             return txt[:1200]
     except Exception:
         pass
+
     return "Гороскоп оновлюється."
 
+
 SIGNS_UA = [
-    "♈ Овен", "♉ Тілець", "♊ Близнюки", "♋ Рак", "♌ Лев", "♍ Діва",
-    "♎ Терези", "♏ Скорпіон", "♐ Стрілець", "♑ Козеріг", "♒ Водолій", "♓ Риби"
+    "♈ Овен",
+    "♉ Тілець",
+    "♊ Близнюки",
+    "♋ Рак",
+    "♌ Лев",
+    "♍ Діва",
+    "♎ Терези",
+    "♏ Скорпіон",
+    "♐ Стрілець",
+    "♑ Козеріг",
+    "♒ Водолій",
+    "♓ Риби",
 ]
+
 
 def kb():
     mk = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     mk.add(*[types.KeyboardButton(s) for s in SIGNS_UA])
     return mk
+
 
 @bot.message_handler(commands=["start"])
 def start(m):
@@ -84,31 +105,46 @@ def start(m):
         reply_markup=kb(),
     )
 
+
 @bot.message_handler(commands=["subscribe"])
 def subscribe(m):
     mk = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=4)
     mk.add(*[types.KeyboardButton(f"{s} Підписатись") for s in SIGNS_UA])
     bot.send_message(m.chat.id, "Обери знак, на який хочеш підписатись:", reply_markup=mk)
 
-@bot.message_handler(func=lambda m: bool(m.text) and m.text.endswith("Підписатись"))
+
+@bot.message_handler(func=lambda m: (m.text or "").endswith("Підписатись"))
 def sub_save(m):
     sign = {
-        "♈": "aries", "♉": "taurus", "♊": "gemini", "♋": "cancer",
-        "♌": "leo", "♍": "virgo", "♎": "libra", "♏": "scorpio",
-        "♐": "sagittarius", "♑": "capricorn", "♒": "aquarius", "♓": "pisces",
+        "♈": "aries",
+        "♉": "taurus",
+        "♊": "gemini",
+        "♋": "cancer",
+        "♌": "leo",
+        "♍": "virgo",
+        "♎": "libra",
+        "♏": "scorpio",
+        "♐": "sagittarius",
+        "♑": "capricorn",
+        "♒": "aquarius",
+        "♓": "pisces",
     }.get(m.text[0])
 
-    if sign:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO subs (user_id, sign) VALUES (?,?)", (m.from_user.id, sign))
-        conn.commit()
-        conn.close()
-        bot.send_message(
-            m.chat.id,
-            f"🔔 Підписку на {m.text[:2]} активовано! Щоранку о 08:00 отримаєш гороскоп.",
-            reply_markup=kb(),
-        )
+    if not sign:
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO subs (user_id, sign) VALUES (?,?)", (m.from_user.id, sign))
+    conn.commit()
+    conn.close()
+
+    bot.send_message(
+        m.chat.id,
+        f"🔔 Підписку на {m.text[:2]} активовано! Щоранку о 08:00 отримаєш гороскоп.",
+        reply_markup=kb(),
+    )
+
 
 @bot.message_handler(commands=["unsubscribe"])
 def unsub(m):
@@ -123,22 +159,33 @@ def unsub(m):
         reply_markup=kb(),
     )
 
+
 @bot.message_handler(func=lambda m: m.text in SIGNS_UA)
 def show_horo(m):
     sign = {
-        "♈ Овен": "aries", "♉ Тілець": "taurus", "♊ Близнюки": "gemini",
-        "♋ Рак": "cancer", "♌ Лев": "leo", "♍ Діва": "virgo",
-        "♎ Терези": "libra", "♏ Скорпіон": "scorpio", "♐ Стрілець": "sagittarius",
-        "♑ Козеріг": "capricorn", "♒ Водолій": "aquarius", "♓ Риби": "pisces",
+        "♈ Овен": "aries",
+        "♉ Тілець": "taurus",
+        "♊ Близнюки": "gemini",
+        "♋ Рак": "cancer",
+        "♌ Лев": "leo",
+        "♍ Діва": "virgo",
+        "♎ Терези": "libra",
+        "♏ Скорпіон": "scorpio",
+        "♐ Стрілець": "sagittarius",
+        "♑ Козеріг": "capricorn",
+        "♒ Водолій": "aquarius",
+        "♓ Риби": "pisces",
     }.get(m.text, "aries")
 
     txt = get_horoscope(sign)
     bot.send_message(m.chat.id, f"{m.text}\n\n{txt}", reply_markup=kb())
 
+
 @bot.message_handler(commands=["stat"])
 def stat(m):
     starters, subs = count_users()
     bot.send_message(m.chat.id, f"📊 Унікальних користувачів: {starters}\n🔔 Активних підписок: {subs}")
+
 
 if __name__ == "__main__":
     init_db()
