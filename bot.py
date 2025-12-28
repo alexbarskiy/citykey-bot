@@ -87,7 +87,7 @@ def show_horo(m):
 @bot.message_handler(commands=['stat'])
 def stat(m):
     # дозволяємо тільки собі (заміни на свій Telegram-ID)
-    ADMIN_ID = 8180365248   # ← твій ID (дізнатись: @userinfobot)
+    ADMIN_ID = 564858074   # ← твій ID (дізнатись: @userinfobot)
     if m.from_user.id == ADMIN_ID:
         total = count_users()
         bot.send_message(m.chat.id, f'📊 Усього підписались: {total}')
@@ -99,3 +99,4 @@ if __name__ == '__main__':
     init_db()                       # створюємо таблицю
     print('Bot started')
     bot.infinity_polling()
+
