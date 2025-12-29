@@ -13,19 +13,24 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 DB_NAME = "stats.db"
 
+H = chr(45)
+
+def slug(parts):
+    return H.join(parts)
+
 SIGNS = {
-    "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
-    "taurus":      {"emoji": "♉", "ua": "Тілець",    "slug": "horoskop-telec"},
-    "gemini":      {"emoji": "♊", "ua": "Близнюки",  "slug": "horoskop-bliznyu"},
-    "cancer":      {"emoji": "♋", "ua": "Рак",       "slug": "horoskop-rak"},
-    "leo":         {"emoji": "♌", "ua": "Лев",       "slug": "horoskop-lev"},
-    "virgo":       {"emoji": "♍", "ua": "Діва",      "slug": "horoskop-diva"},
-    "libra":       {"emoji": "♎", "ua": "Терези",    "slug": "horoskop-terez"},
-    "scorpio":     {"emoji": "♏", "ua": "Скорпіон",  "slug": "horoskop-skorpion"},
-    "sagittarius": {"emoji": "♐", "ua": "Стрілець",  "slug": "horoskop-strilec"},
-    "capricorn":   {"emoji": "♑", "ua": "Козеріг",   "slug": "horoskop-kozerig"},
-    "aquarius":    {"emoji": "♒", "ua": "Водолій",   "slug": "horoskop-vodoliy"},
-    "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": "horoskop-ryby"},
+    "aries":       {"emoji": "♈", "ua": "Овен",      "slug": slug(["horoskop", "oven"])},
+    "taurus":      {"emoji": "♉", "ua": "Тілець",    "slug": slug(["horoskop", "telec"])},
+    "gemini":      {"emoji": "♊", "ua": "Близнюки",  "slug": slug(["horoskop", "bliznyu"])},
+    "cancer":      {"emoji": "♋", "ua": "Рак",       "slug": slug(["horoskop", "rak"])},
+    "leo":         {"emoji": "♌", "ua": "Лев",       "slug": slug(["horoskop", "lev"])},
+    "virgo":       {"emoji": "♍", "ua": "Діва",      "slug": slug(["horoskop", "diva"])},
+    "libra":       {"emoji": "♎", "ua": "Терези",    "slug": slug(["horoskop", "terez"])},
+    "scorpio":     {"emoji": "♏", "ua": "Скорпіон",  "slug": slug(["horoskop", "skorpion"])},
+    "sagittarius": {"emoji": "♐", "ua": "Стрілець",  "slug": slug(["horoskop", "strilec"])},
+    "capricorn":   {"emoji": "♑", "ua": "Козеріг",   "slug": slug(["horoskop", "kozerig"])},
+    "aquarius":    {"emoji": "♒", "ua": "Водолій",   "slug": slug(["horoskop", "vodoliy"])},
+    "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": slug(["horoskop", "ryby"])},
 }
 
 SIGNS_UA_BUTTONS = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
@@ -56,6 +61,17 @@ def init_db() -> None:
             date TEXT,
             PRIMARY KEY (user_id, sign, date)
         )"""
+    )
+    conn.commit()
+    conn.close()
+
+
+def ensure_user_row(user_id: int, first_name: str) -> None:
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO users (user_id, first_name, date) VALUES (?,?,?)",
+        (user_id, first_name, datetime.date.today().isoformat()),
     )
     conn.commit()
     conn.close()
@@ -100,8 +116,9 @@ def count_stats():
 def get_horoscope_preview(sign: str) -> str:
     info = SIGNS.get(sign, SIGNS["aries"])
     url = f'https://www.citykey.com.ua/{info["slug"]}/'
+
     try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+        r = requests.get(url, timeout=12)
         r.raise_for_status()
         soup = bs4.BeautifulSoup(r.text, "html.parser")
 
@@ -115,7 +132,7 @@ def get_horoscope_preview(sign: str) -> str:
                     parts.append(t)
 
         if not parts:
-            for p in soup.find_all("p", limit=6):
+            for p in soup.find_all("p", limit=8):
                 t = p.get_text(" ", strip=True)
                 if t:
                     parts.append(t)
@@ -132,7 +149,6 @@ def get_horoscope_preview(sign: str) -> str:
 
     except Exception:
         return "Гороскоп скоро зʼявиться. Заходь трохи пізніше."
-
 
 
 def sign_keyboard():
@@ -160,15 +176,7 @@ def horo_inline_kb(sign: str, user_id: int):
 
 @bot.message_handler(commands=["start"])
 def start(m):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        "INSERT OR IGNORE INTO users (user_id, first_name, date) VALUES (?,?,?)",
-        (m.from_user.id, m.from_user.first_name, datetime.date.today().isoformat()),
-    )
-    conn.commit()
-    conn.close()
-
+    ensure_user_row(m.from_user.id, m.from_user.first_name or "")
     bot.send_message(
         m.chat.id,
         "👋 Привіт. Обери знак і я дам короткий прогноз. Під прогнозом є кнопка підписки на щоденні оновлення.",
@@ -191,7 +199,7 @@ def show_horo(m):
     )
 
 
-@bot.callback_query_handler(func=lambda c: c.data in ["pick_sign"])
+@bot.callback_query_handler(func=lambda c: c.data == "pick_sign")
 def cb_pick_sign(c):
     try:
         bot.answer_callback_query(c.id)
@@ -206,18 +214,6 @@ def cb_pick_sign(c):
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sub:") or c.data.startswith("unsub:"))
-def ensure_user(user_id: int, first_name: str) -> None:
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        "INSERT OR IGNORE INTO users (user_id, first_name, date) VALUES (?,?,?)",
-        (user_id, first_name, datetime.date.today().isoformat()),
-    )
-    conn.commit()
-    conn.close()
-
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("sub:") or c.data.startswith("unsub:"))
 def cb_subscribe(c):
     data = c.data
     action, sign = data.split(":", 1)
@@ -229,9 +225,8 @@ def cb_subscribe(c):
             pass
         return
 
-    ensure_user(c.from_user.id, c.from_user.first_name)
-
     if action == "sub":
+        ensure_user_row(c.from_user.id, c.from_user.first_name or "")
         subscribe_user(c.from_user.id, sign)
         msg = "Готово. Підписка активна. Щоденні розсилки надійдуть один раз на день."
     else:
@@ -243,16 +238,14 @@ def cb_subscribe(c):
     except Exception:
         pass
 
-    new_kb = horo_inline_kb(sign, c.from_user.id)
     try:
         bot.edit_message_reply_markup(
             chat_id=c.message.chat.id,
             message_id=c.message.message_id,
-            reply_markup=new_kb,
+            reply_markup=horo_inline_kb(sign, c.from_user.id),
         )
     except Exception:
         pass
-
 
 
 @bot.message_handler(func=lambda m: m.text == "🔔 Мої підписки")
@@ -293,6 +286,3 @@ if __name__ == "__main__":
     init_db()
     print("Bot started")
     bot.infinity_polling(skip_pending=True)
-
-
-
