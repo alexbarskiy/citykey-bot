@@ -9,32 +9,25 @@ import re
 import time
 from telebot import types
 
-# --- 1. СУВОРА КОНФІГУРАЦІЯ ТА ДЕБАГ ТОКЕНА ---
-
-# Отримуємо сире значення з системи
+# --- 1. ПЕРЕВІРКА ТА ОЧИЩЕННЯ ТОКЕНА ---
+# Отримуємо токен з перемінних оточення Railway
 raw_token = os.getenv("TOKEN", "")
-
-# Очищуємо від лапок, пробілів та невидимих символів
+# Видаляємо пробіли, лапки та будь-які невидимі символи (наприклад, \n)
 TOKEN = re.sub(r'[\s\t\n\r\'"]+', '', raw_token).strip()
 
-def extreme_debug_token(t):
+def check_token_with_telegram(t):
     print("--- СУПЕР-ДІАГНОСТИКА ТОКЕНА ---", flush=True)
     if not t:
-        print("❌ ТОКЕН ПУСТИЙ! Перевірте назву змінної (має бути TOKEN).", flush=True)
+        print("❌ Помилка: Змінна TOKEN порожня у Variables.", flush=True)
         return False
     
     print(f"Довжина: {len(t)} символів", flush=True)
     print(f"Перші 5 символів: {t[:5]}", flush=True)
     print(f"Останні 5 символів: {t[-5:]}", flush=True)
     
-    # Перевіряємо на наявність не-ASCII символів або пробілів всередині
-    has_space = " " in t
-    print(f"Чи є пробіл всередині: {has_space}", flush=True)
-    
     try:
-        # Прямий запит до API Telegram
-        test_url = f"https://api.telegram.org/bot{t}/getMe"
-        r = requests.get(test_url, timeout=10)
+        # Прямий запит до Telegram без використання бібліотеки
+        r = requests.get(f"https://api.telegram.org/bot{t}/getMe", timeout=10)
         res = r.json()
         if res.get("ok"):
             print(f"✅ УСПІХ! Telegram впізнав бота: @{res['result']['username']}", flush=True)
@@ -44,17 +37,16 @@ def extreme_debug_token(t):
             print(f"Відповідь сервера: {r.text}", flush=True)
             return False
     except Exception as e:
-        print(f"⚠️ Помилка зв'язку: {e}", flush=True)
+        print(f"⚠️ Помилка зв'язку з Telegram: {e}", flush=True)
         return False
 
-# Запускаємо перевірку перед усім іншим
-is_valid = extreme_debug_token(TOKEN)
+# Перевірка токена перед запуском бота
+token_is_valid = check_token_with_telegram(TOKEN)
 
 # Ініціалізація об'єкта бота
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# --- 2. ДАНІ ЗНАКІВ ЗОДІАКУ (ПОВНИЙ СПИСОК) ---
-
+# --- 2. ДАНІ ЗНАКІВ ЗОДІАКУ ---
 SIGNS = {
     "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
     "taurus":      {"emoji": "♉", "ua": "Тілець",    "slug": "horoskop-telec"},
@@ -72,11 +64,9 @@ SIGNS = {
 
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
-
 DB_NAME = os.getenv("DB_PATH", "stats.db")
 
-# --- 3. РОБОТА З БАЗОЮ ДАНИХ ---
-
+# --- 3. ФУНКЦІЇ БАЗИ ДАНИХ ---
 def get_db():
     return sqlite3.connect(DB_NAME, timeout=20)
 
@@ -92,11 +82,11 @@ def init_db():
         c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
         conn.commit()
         conn.close()
-        print("💾 База даних ініціалізована.", flush=True)
+        print("💾 База даних ініціалізована успішно.", flush=True)
     except Exception as e:
-        print(f"❌ Помилка бази: {e}", flush=True)
+        print(f"❌ Помилка бази даних: {e}", flush=True)
 
-def reg_user(uid, name):
+def save_user(uid, name):
     try:
         conn = get_db()
         conn.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", (uid, name, datetime.date.today().isoformat()))
@@ -104,55 +94,68 @@ def reg_user(uid, name):
         conn.close()
     except: pass
 
-# --- 4. ПАРСИНГ ТА КЛАВІАТУРИ ---
-
-def fetch_horo(key):
-    url = f'https://www.citykey.com.ua/{SIGNS[key]["slug"]}/'
+# --- 4. ПАРСИНГ ТА ЛОГІКА ---
+def fetch_horo(sign_key):
+    url = f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'
     try:
-        r = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, timeout=10, headers=headers)
+        r.raise_for_status()
         soup = bs4.BeautifulSoup(r.text, "html.parser")
         p = soup.select_one(".entry-content p")
         txt = p.get_text().strip() if p else ""
-        return (txt[:550] + "...") if len(txt) > 550 else (txt or "Прогноз на сьогодні вже на сайті!")
-    except:
-        return "Детальний прогноз уже опубліковано на нашому сайті."
+        if len(txt) > 550:
+            txt = txt[:550] + "..."
+        return txt or "Сьогоднішній прогноз уже на сайті!"
+    except Exception as e:
+        print(f"Помилка парсингу для {sign_key}: {e}")
+        return "Детальний прогноз на сьогодні вже опубліковано на нашому сайті."
 
-def main_kb():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    markup.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
-    markup.row(types.KeyboardButton("🔔 Мої підписки"), types.KeyboardButton("🔕 Відписатись від всього"))
-    return markup
+# --- 5. КЛАВІАТУРИ ---
+def get_main_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+    kb.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
+    kb.row(types.KeyboardButton("🔔 Мої підписки"), types.KeyboardButton("🔕 Відписатись від всього"))
+    return kb
 
-def inline_kb(key, uid):
+def get_inline_kb(key, uid):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("Читати повний прогноз", url=f'https://www.citykey.com.ua/{SIGNS[key]["slug"]}/'))
     
     conn = get_db()
-    sub = conn.execute("SELECT 1 FROM subs WHERE user_id=? AND sign=?", (uid, key)).fetchone()
+    is_sub = conn.execute("SELECT 1 FROM subs WHERE user_id=? AND sign=?", (uid, key)).fetchone()
     conn.close()
     
-    if sub:
-        kb.add(types.InlineKeyboardButton("🔕 Відписатися", callback_data=f"un:{key}"))
+    if is_sub:
+        kb.add(types.InlineKeyboardButton("🔕 Відписатися від оновлень", callback_data=f"un:{key}"))
     else:
-        kb.add(types.InlineKeyboardButton("🔔 Отримувати щодня", callback_data=f"sub:{key}"))
+        kb.add(types.InlineKeyboardButton("🔔 Отримувати цей знак щодня", callback_data=f"sub:{key}"))
     return kb
 
-# --- 5. ОБРОБНИКИ ПОВІДОМЛЕНЬ ---
-
+# --- 6. ОБРОБНИКИ ПОВІДОМЛЕНЬ ---
 @bot.message_handler(commands=['start'])
-def start(m):
-    reg_user(m.from_user.id, m.from_user.first_name)
-    bot.send_message(m.chat.id, "✨ Вітаю! Оберіть свій знак зодіаку:", reply_markup=main_kb())
+def welcome(m):
+    save_user(m.from_user.id, m.from_user.first_name)
+    bot.send_message(
+        m.chat.id, 
+        "<b>Вітаю!</b> ✨ Я твій астролог.\nОберіть свій знак зодіаку, щоб отримати прогноз:", 
+        reply_markup=get_main_kb()
+    )
 
 @bot.message_handler(func=lambda m: m.text in UA_TO_KEY)
-def horo_msg(m):
-    reg_user(m.from_user.id, m.from_user.first_name)
+def show_horo(m):
+    save_user(m.from_user.id, m.from_user.first_name)
     key = UA_TO_KEY[m.text]
     txt = fetch_horo(key)
-    bot.send_message(m.chat.id, f"✨ <b>{m.text}</b>\n\n{txt}", reply_markup=inline_kb(key, m.from_user.id))
+    bot.send_message(
+        m.chat.id, 
+        f"✨ <b>{m.text}</b>\n\n{txt}", 
+        reply_markup=get_inline_kb(key, m.from_user.id),
+        disable_web_page_preview=True
+    )
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith(('sub:', 'un:')))
-def cb(c):
+def callback_handler(c):
     act, key = c.data.split(':')
     conn = get_db()
     if act == "sub":
@@ -163,38 +166,38 @@ def cb(c):
         bot.answer_callback_query(c.id, "Ви відписалися.")
     conn.commit()
     conn.close()
-    try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, c.from_user.id))
+    try:
+        bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=get_inline_kb(key, c.from_user.id))
     except: pass
 
 @bot.message_handler(func=lambda m: m.text == "🔔 Мої підписки")
-def my_subs(m):
+def my_subscriptions(m):
     conn = get_db()
     rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (m.from_user.id,)).fetchall()
     conn.close()
     if not rows:
-        bot.send_message(m.chat.id, "У вас немає активних підписок.")
+        bot.send_message(m.chat.id, "У вас поки немає активних підписок.")
         return
-    res = "<b>Ваші підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
-    bot.send_message(m.chat.id, res)
+    text = "<b>Ваші підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
+    bot.send_message(m.chat.id, text)
 
 @bot.message_handler(func=lambda m: m.text == "🔕 Відписатись від всього")
-def unsub_all(m):
+def unsub_all_handler(m):
     conn = get_db()
     conn.execute("DELETE FROM subs WHERE user_id=?", (m.from_user.id,))
     conn.commit()
     conn.close()
-    bot.send_message(m.chat.id, "Всі підписки видалено.")
+    bot.send_message(m.chat.id, "Всі ваші підписки видалено.")
 
-# --- 6. ЗАПУСК ---
-
+# --- 7. ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
-    if not is_valid:
-        print("🛑 ЗАПУСК ЗУПИНЕНО: Токен не пройшов перевірку Telegram API.", flush=True)
+    if not token_is_valid:
+        print("🛑 ЗАПУСК ЗУПИНЕНО: Telegram не приймає цей TOKEN. Зробіть Revoke в @BotFather.", flush=True)
         sys.exit(1)
         
-    print("🚀 Бот запускається в режимі розсилки та відповідей...", flush=True)
+    print("🚀 Бот запущений успішно! Очікую повідомлень...", flush=True)
     try:
         bot.infinity_polling(skip_pending=True)
     except Exception as e:
-        print(f"🛑 Критична помилка: {e}", flush=True)
+        print(f"🛑 Критична помилка виконання: {e}", flush=True)
