@@ -5,6 +5,7 @@ import requests
 import bs4
 import telebot
 import time
+import sys
 from telebot.apihelper import ApiTelegramException
 
 # ВАЖЛИВО: Обидва файли (bot.py та broadcast.py) мають використовувати однаковий шлях
@@ -67,7 +68,7 @@ def remove_user_subscription(user_id: int):
     except Exception as e:
         print(f"Помилка видалення користувача: {e}")
 
-def broadcast():
+def broadcast(force_send=False):
     today = datetime.date.today().isoformat()
     
     if not os.path.exists(DB_NAME):
@@ -84,17 +85,19 @@ def broadcast():
         print(f"Помилка читання бази: {e}")
         return
 
-    print(f"Початок розсилки для {len(rows)} записів...")
+    print(f"Початок розсилки для {len(rows)} записів... (Примусово: {force_send})")
 
     for user_id, sign in rows:
         if sign not in SIGNS: continue
         
-        # Перевірка чи вже відправляли сьогодні
-        conn = sqlite3.connect(DB_NAME, timeout=10)
-        sent = conn.execute("SELECT 1 FROM deliveries WHERE user_id=? AND sign=? AND date=?", (user_id, sign, today)).fetchone()
-        conn.close()
-        
-        if sent: continue
+        # Якщо НЕ тестовий запуск, перевіряємо чи вже відправляли сьогодні
+        if not force_send:
+            conn = sqlite3.connect(DB_NAME, timeout=10)
+            sent = conn.execute("SELECT 1 FROM deliveries WHERE user_id=? AND sign=? AND date=?", (user_id, sign, today)).fetchone()
+            conn.close()
+            if sent: 
+                print(f"Користувач {user_id} ({sign}) вже отримав сьогодні. Пропускаю.")
+                continue
 
         info = SIGNS[sign]
         preview_text = get_preview(sign)
@@ -113,11 +116,12 @@ def broadcast():
             conn.execute("INSERT OR IGNORE INTO deliveries (user_id, sign, date) VALUES (?,?,?)", (user_id, sign, today))
             conn.commit()
             conn.close()
+            print(f"Надіслано для {user_id} ({sign})")
             
-            time.sleep(0.1) # Затримка для уникнення Flood лімітів
+            time.sleep(0.2) # Затримка
             
         except ApiTelegramException as e:
-            if e.error_code == 403: # Forbidden: bot was blocked by the user
+            if e.error_code == 403:
                 remove_user_subscription(user_id)
             else:
                 print(f"Помилка Telegram для {user_id}: {e}")
@@ -125,4 +129,6 @@ def broadcast():
             print(f"Загальна помилка для {user_id}: {e}")
 
 if __name__ == "__main__":
-    broadcast()
+    # Перевіряємо чи запущено з аргументом 'test'
+    is_test = len(sys.argv) > 1 and sys.argv[1] == "test"
+    broadcast(force_send=is_test)
