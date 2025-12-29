@@ -1,10 +1,13 @@
 import os
 import sqlite3
 import datetime
+import requests
+import bs4
 import telebot
 import time
+from telebot.apihelper import ApiTelegramException
 
-# Використовуємо ту саму змінну DB_PATH
+# ВАЖЛИВО: Обидва файли (bot.py та broadcast.py) мають використовувати однаковий шлях
 DB_NAME = os.getenv("DB_PATH", "stats.db")
 TOKEN = os.getenv("TOKEN", "").strip()
 
@@ -28,45 +31,98 @@ SIGNS = {
     "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": "horoskop-ryby"},
 }
 
+def _fetch_html(url: str) -> str:
+    session = requests.Session()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    try:
+        r = session.get(url, headers=headers, timeout=(5, 14))
+        r.raise_for_status()
+        return r.text
+    except Exception: return ""
+
+def get_preview(sign: str) -> str:
+    """Отримуємо текст прогнозу для розсилки"""
+    info = SIGNS.get(sign)
+    url = f'https://www.citykey.com.ua/{info["slug"]}/'
+    try:
+        html = _fetch_html(url)
+        if not html: return "Сьогоднішній прогноз уже доступний на сайті!"
+        soup = bs4.BeautifulSoup(html, "html.parser")
+        container = soup.select_one(".entry-content") or soup.body
+        parts = [p.get_text(strip=True) for p in container.find_all("p", limit=3) if len(p.get_text()) > 20]
+        txt = " ".join(parts).strip()
+        return (txt[:400] + "...") if len(txt) > 400 else txt
+    except Exception:
+        return "Сьогоднішній прогноз уже доступний на сайті!"
+
+def remove_user_subscription(user_id: int):
+    """Видаляємо користувача, якщо він заблокував бота"""
+    try:
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        c = conn.cursor()
+        c.execute("DELETE FROM subs WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        print(f"Користувач {user_id} видалений (бот заблокований)")
+    except Exception as e:
+        print(f"Помилка видалення користувача: {e}")
+
 def broadcast():
     today = datetime.date.today().isoformat()
+    
     if not os.path.exists(DB_NAME):
-        print("База даних не знайдена. Скасовую.")
+        print(f"База даних {DB_NAME} не знайдена. Перевірте DB_PATH.")
         return
 
-    conn = sqlite3.connect(DB_NAME, timeout=20)
-    c = conn.cursor()
-    rows = c.execute("SELECT user_id, sign FROM subs").fetchall()
-    conn.close()
+    # Отримуємо список підписок
+    try:
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        c = conn.cursor()
+        rows = c.execute("SELECT user_id, sign FROM subs").fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"Помилка читання бази: {e}")
+        return
 
     print(f"Початок розсилки для {len(rows)} записів...")
 
     for user_id, sign in rows:
-        # Перевірка чи вже відправляли
-        conn = sqlite3.connect(DB_NAME, timeout=20)
+        if sign not in SIGNS: continue
+        
+        # Перевірка чи вже відправляли сьогодні
+        conn = sqlite3.connect(DB_NAME, timeout=10)
         sent = conn.execute("SELECT 1 FROM deliveries WHERE user_id=? AND sign=? AND date=?", (user_id, sign, today)).fetchone()
         conn.close()
         
         if sent: continue
 
-        info = SIGNS.get(sign)
-        if not info: continue
-
-        text = f'{info["emoji"]} <b>{info["ua"]}. Оновлення гороскопу!</b>\n\nСьогоднішній прогноз уже на сайті.'
-        url = f'https://www.citykey.com.ua/{info["slug"]}/'
+        info = SIGNS[sign]
+        preview_text = get_preview(sign)
+        
+        text = f'{info["emoji"]} <b>{info["ua"]}. Гороскоп на сьогодні</b>\n\n{preview_text}'
+        url = f'https://www.citykey.com.ua/{info["slug"]}/?utm_source=telegram'
         
         kb = telebot.types.InlineKeyboardMarkup()
-        kb.add(telebot.types.InlineKeyboardButton("Читати", url=url))
+        kb.add(telebot.types.InlineKeyboardButton("Читати повністю на сайті", url=url))
 
         try:
-            bot.send_message(user_id, text, reply_markup=kb)
-            conn = sqlite3.connect(DB_NAME, timeout=20)
+            bot.send_message(user_id, text, reply_markup=kb, disable_web_page_preview=True)
+            
+            # Помітка про успішну доставку
+            conn = sqlite3.connect(DB_NAME, timeout=10)
             conn.execute("INSERT OR IGNORE INTO deliveries (user_id, sign, date) VALUES (?,?,?)", (user_id, sign, today))
             conn.commit()
             conn.close()
-            time.sleep(0.05) # Пауза для Telegram
+            
+            time.sleep(0.1) # Затримка для уникнення Flood лімітів
+            
+        except ApiTelegramException as e:
+            if e.error_code == 403: # Forbidden: bot was blocked by the user
+                remove_user_subscription(user_id)
+            else:
+                print(f"Помилка Telegram для {user_id}: {e}")
         except Exception as e:
-            print(f"Помилка для {user_id}: {e}")
+            print(f"Загальна помилка для {user_id}: {e}")
 
 if __name__ == "__main__":
     broadcast()
