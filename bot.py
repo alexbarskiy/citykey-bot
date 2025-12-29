@@ -9,41 +9,38 @@ import re
 import time
 from telebot import types
 
-# --- 1. ПЕРЕВІРКА ТА ОЧИЩЕННЯ ТОКЕНА ---
-# Отримуємо токен з перемінних оточення Railway
+# --- 1. ДІАГНОСТИКА ТА ЧАС ЗАПУСКУ ---
+current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# Очищуємо токен від усього зайвого
 raw_token = os.getenv("TOKEN", "")
-# Видаляємо пробіли, лапки та будь-які невидимі символи (наприклад, \n)
 TOKEN = re.sub(r'[\s\t\n\r\'"]+', '', raw_token).strip()
 
 def check_token_with_telegram(t):
-    print("--- СУПЕР-ДІАГНОСТИКА ТОКЕНА ---", flush=True)
+    print(f"--- ДІАГНОСТИКА ТОКЕНА ({current_time}) ---", flush=True)
     if not t:
-        print("❌ Помилка: Змінна TOKEN порожня у Variables.", flush=True)
+        print("❌ Помилка: Змінна TOKEN порожня у Variables Railway.", flush=True)
         return False
     
     print(f"Довжина: {len(t)} символів", flush=True)
-    print(f"Перші 5 символів: {t[:5]}", flush=True)
-    print(f"Останні 5 символів: {t[-5:]}", flush=True)
+    print(f"Початок: {t[:6]}... Кінець: ...{t[-5:]}", flush=True)
     
     try:
-        # Прямий запит до Telegram без використання бібліотеки
+        # Прямий запит до Telegram
         r = requests.get(f"https://api.telegram.org/bot{t}/getMe", timeout=10)
         res = r.json()
         if res.get("ok"):
-            print(f"✅ УСПІХ! Telegram впізнав бота: @{res['result']['username']}", flush=True)
+            print(f"✅ УСПІХ! Бот впізнаний: @{res['result']['username']}", flush=True)
             return True
         else:
-            print(f"❌ ВІДМОВА! Telegram каже: {res.get('description')}", flush=True)
-            print(f"Відповідь сервера: {r.text}", flush=True)
+            print(f"❌ Telegram відхилив цей токен. Причина: {res.get('description')}", flush=True)
             return False
     except Exception as e:
-        print(f"⚠️ Помилка зв'язку з Telegram: {e}", flush=True)
+        print(f"⚠️ Помилка зв'язку: {e}", flush=True)
         return False
 
-# Перевірка токена перед запуском бота
+# Перевірка
 token_is_valid = check_token_with_telegram(TOKEN)
-
-# Ініціалізація об'єкта бота
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # --- 2. ДАНІ ЗНАКІВ ЗОДІАКУ ---
@@ -66,7 +63,7 @@ SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 DB_NAME = os.getenv("DB_PATH", "stats.db")
 
-# --- 3. ФУНКЦІЇ БАЗИ ДАНИХ ---
+# --- 3. БАЗА ДАНИХ ---
 def get_db():
     return sqlite3.connect(DB_NAME, timeout=20)
 
@@ -82,9 +79,9 @@ def init_db():
         c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
         conn.commit()
         conn.close()
-        print("💾 База даних ініціалізована успішно.", flush=True)
+        print("💾 База даних готова.", flush=True)
     except Exception as e:
-        print(f"❌ Помилка бази даних: {e}", flush=True)
+        print(f"❌ Помилка бази: {e}", flush=True)
 
 def save_user(uid, name):
     try:
@@ -94,24 +91,20 @@ def save_user(uid, name):
         conn.close()
     except: pass
 
-# --- 4. ПАРСИНГ ТА ЛОГІКА ---
+# --- 4. ПАРСИНГ ТА КЛАВІАТУРИ ---
 def fetch_horo(sign_key):
     url = f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(url, timeout=10, headers=headers)
-        r.raise_for_status()
         soup = bs4.BeautifulSoup(r.text, "html.parser")
         p = soup.select_one(".entry-content p")
         txt = p.get_text().strip() if p else ""
-        if len(txt) > 550:
-            txt = txt[:550] + "..."
-        return txt or "Сьогоднішній прогноз уже на сайті!"
-    except Exception as e:
-        print(f"Помилка парсингу для {sign_key}: {e}")
-        return "Детальний прогноз на сьогодні вже опубліковано на нашому сайті."
+        if len(txt) > 550: txt = txt[:550] + "..."
+        return txt or "Прогноз уже на сайті!"
+    except:
+        return "Дивіться прогноз на сайті."
 
-# --- 5. КЛАВІАТУРИ ---
 def get_main_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     kb.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
@@ -121,38 +114,27 @@ def get_main_kb():
 def get_inline_kb(key, uid):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("Читати повний прогноз", url=f'https://www.citykey.com.ua/{SIGNS[key]["slug"]}/'))
-    
     conn = get_db()
     is_sub = conn.execute("SELECT 1 FROM subs WHERE user_id=? AND sign=?", (uid, key)).fetchone()
     conn.close()
-    
     if is_sub:
-        kb.add(types.InlineKeyboardButton("🔕 Відписатися від оновлень", callback_data=f"un:{key}"))
+        kb.add(types.InlineKeyboardButton("🔕 Відписатися", callback_data=f"un:{key}"))
     else:
-        kb.add(types.InlineKeyboardButton("🔔 Отримувати цей знак щодня", callback_data=f"sub:{key}"))
+        kb.add(types.InlineKeyboardButton("🔔 Отримувати щодня", callback_data=f"sub:{key}"))
     return kb
 
-# --- 6. ОБРОБНИКИ ПОВІДОМЛЕНЬ ---
+# --- 5. ОБРОБНИКИ ---
 @bot.message_handler(commands=['start'])
 def welcome(m):
     save_user(m.from_user.id, m.from_user.first_name)
-    bot.send_message(
-        m.chat.id, 
-        "<b>Вітаю!</b> ✨ Я твій астролог.\nОберіть свій знак зодіаку, щоб отримати прогноз:", 
-        reply_markup=get_main_kb()
-    )
+    bot.send_message(m.chat.id, "👋 Привіт! Оберіть свій знак зодіаку:", reply_markup=get_main_kb())
 
 @bot.message_handler(func=lambda m: m.text in UA_TO_KEY)
 def show_horo(m):
     save_user(m.from_user.id, m.from_user.first_name)
     key = UA_TO_KEY[m.text]
     txt = fetch_horo(key)
-    bot.send_message(
-        m.chat.id, 
-        f"✨ <b>{m.text}</b>\n\n{txt}", 
-        reply_markup=get_inline_kb(key, m.from_user.id),
-        disable_web_page_preview=True
-    )
+    bot.send_message(m.chat.id, f"✨ <b>{m.text}</b>\n\n{txt}", reply_markup=get_inline_kb(key, m.from_user.id))
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith(('sub:', 'un:')))
 def callback_handler(c):
@@ -160,14 +142,13 @@ def callback_handler(c):
     conn = get_db()
     if act == "sub":
         conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (c.from_user.id, key))
-        bot.answer_callback_query(c.id, "Підписку оформлено!")
+        bot.answer_callback_query(c.id, "Підписано!")
     else:
         conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (c.from_user.id, key))
-        bot.answer_callback_query(c.id, "Ви відписалися.")
+        bot.answer_callback_query(c.id, "Відписано.")
     conn.commit()
     conn.close()
-    try:
-        bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=get_inline_kb(key, c.from_user.id))
+    try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=get_inline_kb(key, c.from_user.id))
     except: pass
 
 @bot.message_handler(func=lambda m: m.text == "🔔 Мої підписки")
@@ -176,7 +157,7 @@ def my_subscriptions(m):
     rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (m.from_user.id,)).fetchall()
     conn.close()
     if not rows:
-        bot.send_message(m.chat.id, "У вас поки немає активних підписок.")
+        bot.send_message(m.chat.id, "У вас немає активних підписок.")
         return
     text = "<b>Ваші підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
     bot.send_message(m.chat.id, text)
@@ -187,17 +168,17 @@ def unsub_all_handler(m):
     conn.execute("DELETE FROM subs WHERE user_id=?", (m.from_user.id,))
     conn.commit()
     conn.close()
-    bot.send_message(m.chat.id, "Всі ваші підписки видалено.")
+    bot.send_message(m.chat.id, "Всі підписки видалено.")
 
-# --- 7. ЗАПУСК ---
+# --- 6. ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
     if not token_is_valid:
-        print("🛑 ЗАПУСК ЗУПИНЕНО: Telegram не приймає цей TOKEN. Зробіть Revoke в @BotFather.", flush=True)
+        print(f"🛑 ЗАПУСК ЗУПИНЕНО: Telegram не приймає токен {TOKEN[:5]}...{TOKEN[-5:]}. Оновіть Variables та натисніть REDEPLOY.", flush=True)
         sys.exit(1)
         
-    print("🚀 Бот запущений успішно! Очікую повідомлень...", flush=True)
+    print("🚀 Бот запущений успішно!", flush=True)
     try:
         bot.infinity_polling(skip_pending=True)
     except Exception as e:
-        print(f"🛑 Критична помилка виконання: {e}", flush=True)
+        print(f"🛑 Критична помилка: {e}", flush=True)
