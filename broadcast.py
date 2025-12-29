@@ -1,55 +1,37 @@
-#!/usr/bin/env python3
+# broadcast.py
 import os
 import sqlite3
 import requests
 import bs4
 import telebot
-from telebot import types
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN", "").strip()
 if not TOKEN:
-    raise RuntimeError("ENV TOKEN is missing. Add TOKEN in Railway Variables.")
+    raise RuntimeError("TOKEN env var is missing. Add TOKEN in Railway Variables.")
 
-bot = telebot.TeleBot(TOKEN)
-DB_PATH = os.getenv("DB_PATH", "stats.db")
-
-SIGN_TO_SLUG = {
-    "aries": "horoskop-oven",
-    "taurus": "horoskop-telec",
-    "gemini": "horoskop-bliznyu",
-    "cancer": "horoskop-rak",
-    "leo": "horoskop-lev",
-    "virgo": "horoskop-diva",
-    "libra": "horoskop-terez",
-    "scorpio": "horoskop-skorpion",
-    "sagittarius": "horoskop-strilec",
-    "capricorn": "horoskop-kozerig",
-    "aquarius": "horoskop-vodoliy",
-    "pisces": "horoskop-ryby",
-}
+bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
+DB_NAME = "stats.db"
 
 SIGNS = {
-    "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋",
-    "leo": "♌", "virgo": "♍", "libra": "♎", "scorpio": "♏",
-    "sagittarius": "♐", "capricorn": "♑", "aquarius": "♒", "pisces": "♓",
+    "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
+    "taurus":      {"emoji": "♉", "ua": "Тілець",    "slug": "horoskop-telec"},
+    "gemini":      {"emoji": "♊", "ua": "Близнюки",  "slug": "horoskop-bliznyu"},
+    "cancer":      {"emoji": "♋", "ua": "Рак",       "slug": "horoskop-rak"},
+    "leo":         {"emoji": "♌", "ua": "Лев",       "slug": "horoskop-lev"},
+    "virgo":       {"emoji": "♍", "ua": "Діва",      "slug": "horoskop-diva"},
+    "libra":       {"emoji": "♎", "ua": "Терези",    "slug": "horoskop-terez"},
+    "scorpio":     {"emoji": "♏", "ua": "Скорпіон",  "slug": "horoskop-skorpion"},
+    "sagittarius": {"emoji": "♐", "ua": "Стрілець",  "slug": "horoskop-strilec"},
+    "capricorn":   {"emoji": "♑", "ua": "Козеріг",   "slug": "horoskop-kozerig"},
+    "aquarius":    {"emoji": "♒", "ua": "Водолій",   "slug": "horoskop-vodoliy"},
+    "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": "horoskop-ryby"},
 }
 
-def build_readmore_url(sign: str) -> str:
-    slug = SIGN_TO_SLUG.get(sign, "horoskop-oven")
-    base = f"https://www.citykey.com.ua/{slug}/"
-    utm = f"?utm_source=telegram&utm_medium=bot&utm_campaign=horoscope&utm_content={sign}"
-    return base + utm
-
-def inline_readmore(sign: str):
-    ik = types.InlineKeyboardMarkup()
-    ik.add(types.InlineKeyboardButton("Читати далі на сайті", url=build_readmore_url(sign)))
-    return ik
-
-def fetch_horoscope_excerpt(sign: str, max_chars: int = 520) -> str:
-    slug = SIGN_TO_SLUG.get(sign, "horoskop-oven")
-    url = f"https://www.citykey.com.ua/{slug}/"
+def get_preview(sign: str) -> str:
+    info = SIGNS.get(sign, SIGNS["aries"])
+    url = f'https://www.citykey.com.ua/{info["slug"]}/'
     try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
         r.raise_for_status()
         soup = bs4.BeautifulSoup(r.text, "html.parser")
         h3 = soup.find("h3")
@@ -61,30 +43,40 @@ def fetch_horoscope_excerpt(sign: str, max_chars: int = 520) -> str:
             t = p.get_text(" ", strip=True)
             if t:
                 parts.append(t)
-
-        text = " ".join(parts).strip()
-        if not text:
+        txt = " ".join(parts).strip()
+        if not txt:
             return "Гороскоп оновлюється."
 
-        if len(text) > max_chars:
-            text = text[:max_chars].rstrip() + "…"
-        return text
+        if len(txt) > 600:
+            txt = txt[:600].rsplit(" ", 1)[0] + "…"
+        return txt
     except Exception:
         return "Гороскоп оновлюється."
 
+
 def broadcast():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    subs = c.execute("SELECT user_id, sign FROM subs").fetchall()
+    rows = c.execute("SELECT user_id, sign FROM subs").fetchall()
     conn.close()
 
-    for user_id, sign in subs:
-        emoji = SIGNS.get(sign, "♈")
-        txt = fetch_horoscope_excerpt(sign)
+    for user_id, sign in rows:
+        info = SIGNS.get(sign, SIGNS["aries"])
+        preview = get_preview(sign)
+        url = f'https://www.citykey.com.ua/{info["slug"]}/?utm_source=telegram&utm_medium=bot&utm_campaign=horoscope_daily&utm_content={sign}'
+
+        text = (
+            f'{info["emoji"]} <b>{info["ua"]}. Гороскоп на сьогодні</b>\n\n'
+            f'{preview}\n\n'
+            f'Читати повністю: {url}\n'
+            f'Щоб відписатись: натисни кнопку під прогнозом або напиши "🔕 Відписатись від всього"'
+        )
+
         try:
-            bot.send_message(user_id, f"{emoji} Гороскоп на сьогодні\n\n{txt}", reply_markup=inline_readmore(sign))
+            bot.send_message(user_id, text, disable_web_page_preview=True)
         except Exception as e:
-            print(f"Send failed {user_id}: {e}")
+            print(f"Send failed to {user_id}: {e}")
+
 
 if __name__ == "__main__":
     broadcast()
