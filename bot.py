@@ -6,15 +6,17 @@ import bs4
 import telebot
 from telebot import types
 
-# Використання шляху для Railway Volume (змінна DB_PATH)
+# Читаємо шлях до бази з налаштувань Railway. 
+# Якщо змінної DB_PATH немає, використовуємо локальний файл stats.db.
 DB_NAME = os.getenv("DB_PATH", "stats.db")
 TOKEN = os.getenv("TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("TOKEN env var is missing. Add it in Railway Variables.")
+    raise RuntimeError("TOKEN env var is missing. Додайте TOKEN у Variables на Railway.")
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
+# Словник з даними знаків (slug для сайту, емодзі та назва)
 SIGNS = {
     "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
     "taurus":      {"emoji": "♉", "ua": "Тілець",    "slug": "horoskop-telec"},
@@ -30,34 +32,30 @@ SIGNS = {
     "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": "horoskop-ryby"},
 }
 
+# Допоміжні списки для кнопок
 SIGNS_UA_BUTTONS = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_SIGN = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
-# --- Робота з базою даних ---
+# --- Робота з Базою Даних (SQLite) ---
 
 def get_db_connection():
-    # timeout 10 секунд допомагає уникнути помилки "database is locked" на Railway
+    # timeout 10 допомагає уникнути помилки "database is locked" на Railway
     return sqlite3.connect(DB_NAME, timeout=10)
 
 def init_db() -> None:
+    # Створюємо папку для бази (якщо використовуємо Volume)
+    db_dir = os.path.dirname(DB_NAME)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY, 
-        first_name TEXT, 
-        date TEXT
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS subs (
-        user_id INTEGER, 
-        sign TEXT, 
-        PRIMARY KEY (user_id, sign)
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS deliveries (
-        user_id INTEGER, 
-        sign TEXT, 
-        date TEXT, 
-        PRIMARY KEY (user_id, sign, date)
-    )""")
+    # Таблиця користувачів
+    c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT)")
+    # Таблиця підписок
+    c.execute("CREATE TABLE IF NOT EXISTS subs (user_id INTEGER, sign TEXT, PRIMARY KEY (user_id, sign))")
+    # Таблиця відправлених повідомлень
+    c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
     conn.commit()
     conn.close()
 
@@ -90,7 +88,7 @@ def unsubscribe_user(user_id: int, sign: str) -> None:
     conn.commit()
     conn.close()
 
-# --- Парсинг гороскопу ---
+# --- Парсинг сайту ---
 
 def _fetch_html(url: str) -> str:
     session = requests.Session()
@@ -99,33 +97,31 @@ def _fetch_html(url: str) -> str:
         r = session.get(url, headers=headers, timeout=(5, 14))
         r.raise_for_status()
         return r.text
-    except Exception:
-        return ""
+    except Exception: return ""
 
 def get_horoscope_preview(sign: str) -> str:
     info = SIGNS.get(sign, SIGNS["aries"])
     url = f'https://www.citykey.com.ua/{info["slug"]}/'
     try:
         html = _fetch_html(url)
-        if not html: return "Прогноз на сайті. Тисни кнопку."
+        if not html: return "Сьогоднішній прогноз уже доступний на сайті! Натисніть кнопку нижче, щоб прочитати."
         soup = bs4.BeautifulSoup(html, "html.parser")
         container = soup.select_one(".entry-content") or soup.body
         parts = [p.get_text(strip=True) for p in container.find_all("p", limit=5) if len(p.get_text()) > 20]
         txt = " ".join(parts).strip()
         if not txt:
-            return "Сьогоднішній прогноз вже на сайті! Тисніть кнопку нижче."
+            return "Сьогоднішній прогноз чекає на вас на сайті."
         return (txt[:600] + "...") if len(txt) > 600 else txt
-    except Exception:
-        return "Прогноз доступний на сайті за посиланням."
+    except Exception: 
+        return "Детальний прогноз на сьогодні вже опубліковано на сайті."
 
-# --- Клавіатури ---
+# --- Кнопки (Клавіатури) ---
 
 def sign_keyboard():
     mk = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    # Кнопки знаків
-    buttons = [types.KeyboardButton(x) for x in SIGNS_UA_BUTTONS]
-    mk.add(*buttons)
-    # Функціональні кнопки
+    # Додаємо всі знаки зодіаку
+    mk.add(*[types.KeyboardButton(x) for x in SIGNS_UA_BUTTONS])
+    # Додаємо системні кнопки
     mk.row(types.KeyboardButton("🔔 Мої підписки"), types.KeyboardButton("🔕 Відписатись від всього"))
     return mk
 
@@ -133,22 +129,22 @@ def horo_inline_kb(sign: str, user_id: int):
     info = SIGNS.get(sign)
     url = f'https://www.citykey.com.ua/{info["slug"]}/?utm_source=telegram'
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("Читати далі на сайті", url=url))
+    kb.add(types.InlineKeyboardButton("Читати повний прогноз", url=url))
     
     if is_subscribed(user_id, sign):
-        kb.add(types.InlineKeyboardButton("🔕 Відписатись від цього знака", callback_data=f"unsub:{sign}"))
+        kb.add(types.InlineKeyboardButton("🔕 Відписатись від оновлень", callback_data=f"unsub:{sign}"))
     else:
-        kb.add(types.InlineKeyboardButton("🔔 Підписатись на цей знак", callback_data=f"sub:{sign}"))
+        kb.add(types.InlineKeyboardButton("🔔 Отримувати оновлення щодня", callback_data=f"sub:{sign}"))
     return kb
 
-# --- Обробники команд ---
+# --- Обробники повідомлень ---
 
 @bot.message_handler(commands=["start"])
 def start(m):
     ensure_user(m.from_user.id, m.from_user.first_name or "")
     bot.send_message(
         m.chat.id, 
-        "Привіт! Я допоможу тобі стежити за гороскопом.\n\nОбери свій знак зодіаку:", 
+        "👋 Привіт! Я твій особистий астролог.\n\nОбери свій знак зодіаку, щоб отримати прогноз на сьогодні або підписатися на щоденні оновлення:", 
         reply_markup=sign_keyboard()
     )
 
@@ -165,16 +161,16 @@ def show_horo(m):
     )
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith(("sub:", "unsub:")))
-def cb_sub(c):
+def cb_handler(c):
     action, sign = c.data.split(":")
     if action == "sub":
         subscribe_user(c.from_user.id, sign)
-        bot.answer_callback_query(c.id, "Підписку оформлено! Ви отримаєте оновлення завтра зранку.")
+        bot.answer_callback_query(c.id, "Ви підписалися! Я надішлю прогноз завтра зранку.")
     else:
         unsubscribe_user(c.from_user.id, sign)
         bot.answer_callback_query(c.id, "Ви відписалися від цього знака.")
     
-    # Оновлення кнопок під повідомленням
+    # Оновлюємо кнопки під повідомленням
     try:
         bot.edit_message_reply_markup(
             c.message.chat.id, 
@@ -192,7 +188,7 @@ def my_subs(m):
     conn.close()
 
     if not rows:
-        bot.send_message(m.chat.id, "У вас поки немає активних підписок. Виберіть знак і натисніть кнопку 'Підписатись'.")
+        bot.send_message(m.chat.id, "У вас поки що немає активних підписок.")
         return
 
     names = []
@@ -200,7 +196,7 @@ def my_subs(m):
         if s in SIGNS:
             names.append(f'{SIGNS[s]["emoji"]} {SIGNS[s]["ua"]}')
     
-    bot.send_message(m.chat.id, "<b>Ваші підписки:</b>\n\n" + "\n".join(names))
+    bot.send_message(m.chat.id, "<b>Ваші активні підписки:</b>\n\n" + "\n".join(names))
 
 @bot.message_handler(func=lambda m: m.text == "🔕 Відписатись від всього")
 def unsub_all(m):
@@ -209,10 +205,19 @@ def unsub_all(m):
     conn.execute("DELETE FROM subs WHERE user_id = ?", (m.from_user.id,))
     conn.commit()
     conn.close()
-    bot.send_message(m.chat.id, "Ви успішно відписані від усіх оновлень.")
+    bot.send_message(m.chat.id, "Ви успішно відписані від усіх розсилок.")
+
+@bot.message_handler(commands=["stat"])
+def stat(m):
+    # Команда для перевірки кількості користувачів (тільки для вас)
+    conn = get_db_connection()
+    u_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    s_count = conn.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
+    conn.close()
+    bot.send_message(m.chat.id, f"📊 Статистика:\n- Всього користувачів: {u_count}\n- Активних підписок: {s_count}")
 
 if __name__ == "__main__":
     init_db()
     print("Бот запущений...")
-    bot.infinity_polling()
-
+    # skip_pending=True допомагає не відповідати на старі повідомлення після перезапуску
+    bot.infinity_polling(skip_pending=True)
