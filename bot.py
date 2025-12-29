@@ -5,24 +5,23 @@ import requests
 import bs4
 import telebot
 import sys
+import re
 from telebot import types
 
-# 1. КОНФІГУРАЦІЯ ТА ДІАГНОСТИКА
-# Отримуємо токен та шлях до бази з перемінних Railway
-TOKEN = os.getenv("TOKEN", "").strip().replace('"', '').replace("'", "")
+# 1. КОНФІГУРАЦІЯ ТА СУВОРА ЧИСТКА ТОКЕНА
+raw_token = os.getenv("TOKEN", "")
+# Видаляємо пробіли, лапки та будь-які невидимі символи переносу рядка
+TOKEN = re.sub(r'\s+', '', raw_token).replace('"', '').replace("'", "")
 DB_NAME = os.getenv("DB_PATH", "stats.db")
 
 print("--- ДІАГНОСТИКА СИСТЕМИ ---", flush=True)
 print(f"Довжина токена: {len(TOKEN)} символів", flush=True)
-if len(TOKEN) > 10:
-    print(f"Токен починається на: {TOKEN[:6]}...", flush=True)
-else:
-    print("УВАГА: Токен порожній або надто короткий!", flush=True)
 
 if not TOKEN:
-    print("КРИТИЧНА ПОМИЛКА: TOKEN не знайдено у Variables на Railway!", flush=True)
+    print("КРИТИЧНА ПОМИЛКА: TOKEN порожній! Перевірте Variables на Railway.", flush=True)
     sys.exit(1)
 
+# Ініціалізація бота
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # 2. ДАНІ ЗНАКІВ ЗОДІАКУ
@@ -41,18 +40,15 @@ SIGNS = {
     "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": "horoskop-ryby"},
 }
 
-# Списки для швидкого пошуку в кнопках
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
 # 3. ФУНКЦІЇ БАЗИ ДАНИХ
 def get_db():
-    # Використовуємо timeout для уникнення блокувань на Railway
     return sqlite3.connect(DB_NAME, timeout=15)
 
 def init_db():
     try:
-        # Створюємо папку для бази, якщо вона вказана (наприклад, /data/)
         db_dir = os.path.dirname(DB_NAME)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
@@ -66,29 +62,33 @@ def init_db():
         conn.close()
         print("База даних готова до роботи.", flush=True)
     except Exception as e:
-        print(f"Помилка ініціалізації бази: {e}", flush=True)
+        print(f"Помилка бази: {e}", flush=True)
 
 def ensure_user(uid, name):
-    conn = get_db()
-    conn.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", (uid, name, datetime.date.today().isoformat()))
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_db()
+        conn.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", (uid, name, datetime.date.today().isoformat()))
+        conn.commit()
+        conn.close()
+    except: pass
 
 def db_action(action, uid, sign=None):
     conn = get_db()
     res = None
-    if action == "sub":
-        conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (uid, sign))
-    elif action == "unsub":
-        conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (uid, sign))
-    elif action == "unsub_all":
-        conn.execute("DELETE FROM subs WHERE user_id=?", (uid,))
-    elif action == "check":
-        res = conn.execute("SELECT 1 FROM subs WHERE user_id=? AND sign=?", (uid, sign)).fetchone()
-    elif action == "get_my":
-        res = conn.execute("SELECT sign FROM subs WHERE user_id=?", (uid,)).fetchall()
-    conn.commit()
-    conn.close()
+    try:
+        if action == "sub":
+            conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (uid, sign))
+        elif action == "unsub":
+            conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (uid, sign))
+        elif action == "unsub_all":
+            conn.execute("DELETE FROM subs WHERE user_id=?", (uid,))
+        elif action == "check":
+            res = conn.execute("SELECT 1 FROM subs WHERE user_id=? AND sign=?", (uid, sign)).fetchone()
+        elif action == "get_my":
+            res = conn.execute("SELECT sign FROM subs WHERE user_id=?", (uid,)).fetchall()
+        conn.commit()
+    finally:
+        conn.close()
     return res
 
 # 4. ПАРСИНГ ТА КЛАВІАТУРИ
@@ -122,11 +122,11 @@ def inline_kb(sign_key, uid):
         kb.add(types.InlineKeyboardButton("🔔 Отримувати щодня", callback_data=f"sub:{sign_key}"))
     return kb
 
-# 5. ОБРОБНИКИ КОМАНД
+# 5. ОБРОБНИКИ
 @bot.message_handler(commands=['start'])
 def cmd_start(m):
     ensure_user(m.from_user.id, m.from_user.first_name)
-    bot.send_message(m.chat.id, "✨ Привіт! Я твій зірковий провідник.\nОбери свій знак зодіаку, щоб отримати прогноз:", reply_markup=main_kb())
+    bot.send_message(m.chat.id, "✨ Привіт! Обери свій знак зодіаку:", reply_markup=main_kb())
 
 @bot.message_handler(func=lambda m: m.text in UA_TO_KEY)
 def send_horo(m):
@@ -140,11 +140,10 @@ def handle_callback(c):
     act, key = c.data.split(':')
     if act == "sub":
         db_action("sub", c.from_user.id, key)
-        bot.answer_callback_query(c.id, "Підписку оформлено! Чекайте прогноз завтра зранку.")
+        bot.answer_callback_query(c.id, "Підписку оформлено!")
     else:
         db_action("unsub", c.from_user.id, key)
         bot.answer_callback_query(c.id, "Ви відписалися.")
-    
     try:
         bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, c.from_user.id))
     except: pass
@@ -153,9 +152,8 @@ def handle_callback(c):
 def show_subs(m):
     rows = db_action("get_my", m.from_user.id)
     if not rows:
-        bot.send_message(m.chat.id, "У вас поки немає активних підписок.")
+        bot.send_message(m.chat.id, "У вас немає активних підписок.")
         return
-    
     res = "<b>Ваші підписки:</b>\n"
     for (key,) in rows:
         if key in SIGNS:
@@ -163,13 +161,9 @@ def show_subs(m):
     bot.send_message(m.chat.id, res)
 
 @bot.message_handler(func=lambda m: m.text == "🔕 Відписатись від всього")
-def unsub_all(m):
+def unsub_all_cmd(m):
     db_action("unsub_all", m.from_user.id)
     bot.send_message(m.chat.id, "Ви відписані від усіх розсилок.")
-
-@bot.message_handler(func=lambda m: True)
-def default_msg(m):
-    bot.send_message(m.chat.id, "Будь ласка, скористайтеся меню нижче для вибору знака зодіаку.", reply_markup=main_kb())
 
 # 6. ЗАПУСК
 if __name__ == "__main__":
