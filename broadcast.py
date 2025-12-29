@@ -8,7 +8,7 @@ import time
 import sys
 from telebot.apihelper import ApiTelegramException
 
-# ВАЖЛИВО: Шлях має бути ідентичним тому, що в bot.py
+# Шлях має бути ідентичним тому, що в bot.py
 DB_NAME = os.getenv("DB_PATH", "stats.db")
 TOKEN = os.getenv("TOKEN", "").strip()
 
@@ -58,77 +58,60 @@ def get_preview(sign: str) -> str:
 def broadcast(force_send=False):
     today = datetime.date.today().isoformat()
     
-    print(f"--- ЗАПУСК РОЗСИЛКИ ---")
-    print(f"Шлях до бази: {DB_NAME}")
-    print(f"Чи існує файл бази: {os.path.exists(DB_NAME)}")
-
+    # Використовуємо flush=True для миттєвого відображення в логах Railway
+    print(f"--- ЗАПУСК РОЗСИЛКИ ---", flush=True)
+    print(f"Шлях до бази: {DB_NAME}", flush=True)
+    
     if not os.path.exists(DB_NAME):
-        print(f"ПОМИЛКА: Файл бази не знайдено за шляхом {DB_NAME}. Перевірте змінні оточення або чи запущено бота хоча б раз.")
+        print(f"ПОМИЛКА: Файл бази не знайдено: {DB_NAME}", flush=True)
         return
 
-    # Отримуємо список підписок
     try:
-        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn = sqlite3.connect(DB_NAME, timeout=20)
         c = conn.cursor()
-        # Перевіряємо чи є таблиця
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='subs'")
-        if not c.fetchone():
-            print("ПОМИЛКА: Таблиця 'subs' не існує в цій базі.")
-            conn.close()
-            return
-            
         rows = c.execute("SELECT user_id, sign FROM subs").fetchall()
         conn.close()
     except Exception as e:
-        print(f"ПОМИЛКА ПРИ РОБОТІ З БАЗОЮ: {e}")
+        print(f"ПОМИЛКА БАЗИ: {e}", flush=True)
         return
 
-    print(f"Знайдено підписок у базі: {len(rows)}")
+    print(f"Знайдено активних підписок: {len(rows)}", flush=True)
     
     if len(rows) == 0:
-        print("Розсилка скасована: немає жодного підписника.")
+        print("Нікому відправляти. Підпишіться в боті!", flush=True)
         return
 
     for user_id, sign in rows:
-        if sign not in SIGNS: 
-            print(f"Пропускаю невідомий знак: {sign}")
-            continue
+        if sign not in SIGNS: continue
         
         if not force_send:
-            try:
-                conn = sqlite3.connect(DB_NAME, timeout=10)
-                sent = conn.execute("SELECT 1 FROM deliveries WHERE user_id=? AND sign=? AND date=?", (user_id, sign, today)).fetchone()
-                conn.close()
-                if sent: 
-                    print(f"Користувач {user_id} вже отримував прогноз сьогодні. Пропускаю.")
-                    continue
-            except: pass
+            conn = sqlite3.connect(DB_NAME, timeout=20)
+            sent = conn.execute("SELECT 1 FROM deliveries WHERE user_id=? AND sign=? AND date=?", (user_id, sign, today)).fetchone()
+            conn.close()
+            if sent: continue
 
         info = SIGNS[sign]
         preview_text = get_preview(sign)
         text = f'{info["emoji"]} <b>{info["ua"]}. Гороскоп на сьогодні</b>\n\n{preview_text}'
         url = f'https://www.citykey.com.ua/{info["slug"]}/?utm_source=telegram'
         kb = telebot.types.InlineKeyboardMarkup()
-        kb.add(telebot.types.InlineKeyboardButton("Читати повністю на сайті", url=url))
+        kb.add(telebot.types.InlineKeyboardButton("Читати повністю", url=url))
 
         try:
             bot.send_message(user_id, text, reply_markup=kb, disable_web_page_preview=True)
-            
-            # Помітка про доставку
-            conn = sqlite3.connect(DB_NAME, timeout=10)
+            conn = sqlite3.connect(DB_NAME, timeout=20)
             conn.execute("INSERT OR IGNORE INTO deliveries (user_id, sign, date) VALUES (?,?,?)", (user_id, sign, today))
             conn.commit()
             conn.close()
-            print(f"УСПІШНО надіслано для {user_id} ({sign})")
-            time.sleep(0.3)
-            
+            print(f"УСПІШНО: {user_id}", flush=True)
+            time.sleep(0.1)
         except ApiTelegramException as e:
-            print(f"ПОМИЛКА TELEGRAM для {user_id}: {e}")
+            print(f"ТЕЛЕГРАМ ПОМИЛКА {user_id}: {e.description}", flush=True)
         except Exception as e:
-            print(f"ЗАГАЛЬНА ПОМИЛКА для {user_id}: {e}")
+            print(f"ПОМИЛКА {user_id}: {e}", flush=True)
 
-    print(f"--- РОЗСИЛКА ЗАВЕРШЕНА ---")
+    print(f"--- ЗАВЕРШЕНО ---", flush=True)
 
 if __name__ == "__main__":
-    is_test = len(sys.argv) > 1 and sys.argv[1] == "test"
-    broadcast(force_send=is_test)
+    force = len(sys.argv) > 1 and sys.argv[1] == "test"
+    broadcast(force_send=force)
