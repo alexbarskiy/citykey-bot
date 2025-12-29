@@ -8,12 +8,13 @@ import time
 import sys
 from telebot.apihelper import ApiTelegramException
 
-# Шлях має бути ідентичним тому, що в bot.py
+# Отримуємо шлях до бази та токен з оточення
 DB_NAME = os.getenv("DB_PATH", "stats.db")
 TOKEN = os.getenv("TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("TOKEN is missing.")
+    print("--- КРИТИЧНА ПОМИЛКА: TOKEN не знайдено у змінних оточення! ---", flush=True)
+    sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
@@ -32,86 +33,97 @@ SIGNS = {
     "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": "horoskop-ryby"},
 }
 
-def _fetch_html(url: str) -> str:
-    session = requests.Session()
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    try:
-        r = session.get(url, headers=headers, timeout=(5, 14))
-        r.raise_for_status()
-        return r.text
-    except Exception: return ""
-
 def get_preview(sign: str) -> str:
+    """Отримання короткого тексту гороскопу з сайту"""
     info = SIGNS.get(sign)
     url = f'https://www.citykey.com.ua/{info["slug"]}/'
     try:
-        html = _fetch_html(url)
-        if not html: return "Сьогоднішній прогноз уже доступний на сайті!"
-        soup = bs4.BeautifulSoup(html, "html.parser")
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+        soup = bs4.BeautifulSoup(r.text, "html.parser")
         container = soup.select_one(".entry-content") or soup.body
         parts = [p.get_text(strip=True) for p in container.find_all("p", limit=3) if len(p.get_text()) > 20]
         txt = " ".join(parts).strip()
-        return (txt[:400] + "...") if len(txt) > 400 else txt
-    except Exception:
-        return "Сьогоднішній прогноз уже доступний на сайті!"
+        return (txt[:400] + "...") if len(txt) > 400 else (txt or "Читати далі на сайті.")
+    except Exception as e:
+        return "Сьогоднішній прогноз уже опубліковано на сайті!"
 
 def broadcast(force_send=False):
     today = datetime.date.today().isoformat()
     
-    # Використовуємо flush=True для миттєвого відображення в логах Railway
-    print(f"--- ЗАПУСК РОЗСИЛКИ ---", flush=True)
-    print(f"Шлях до бази: {DB_NAME}", flush=True)
+    print(f"--- ПЕРЕВІРКА ЗАПУСКУ ---", flush=True)
     
+    # Перевірка наявності бази даних
     if not os.path.exists(DB_NAME):
-        print(f"ПОМИЛКА: Файл бази не знайдено: {DB_NAME}", flush=True)
+        print(f"ПОМИЛКА: Базу {DB_NAME} не знайдено. Можливо, Volume не підключено або шлях невірний.", flush=True)
         return
 
     try:
         conn = sqlite3.connect(DB_NAME, timeout=20)
         c = conn.cursor()
+        # Перевірка таблиці підписок
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='subs'")
+        if not c.fetchone():
+            print("ПОМИЛКА: Таблиця 'subs' не знайдена. Бот ще не ініціалізував базу?", flush=True)
+            conn.close()
+            return
+            
         rows = c.execute("SELECT user_id, sign FROM subs").fetchall()
         conn.close()
     except Exception as e:
-        print(f"ПОМИЛКА БАЗИ: {e}", flush=True)
+        print(f"ПОМИЛКА БАЗИ ДАНИХ: {e}", flush=True)
         return
 
-    print(f"Знайдено активних підписок: {len(rows)}", flush=True)
+    print(f"Знайдено підписок для розсилки: {len(rows)}", flush=True)
     
     if len(rows) == 0:
-        print("Нікому відправляти. Підпишіться в боті!", flush=True)
+        print("Розсилка скасована: база порожня. Підпишіться на знаки в боті.", flush=True)
         return
 
     for user_id, sign in rows:
         if sign not in SIGNS: continue
         
+        # Перевірка дублікатів (якщо це не тестовий запуск)
         if not force_send:
-            conn = sqlite3.connect(DB_NAME, timeout=20)
-            sent = conn.execute("SELECT 1 FROM deliveries WHERE user_id=? AND sign=? AND date=?", (user_id, sign, today)).fetchone()
-            conn.close()
-            if sent: continue
+            try:
+                conn = sqlite3.connect(DB_NAME, timeout=20)
+                sent = conn.execute("SELECT 1 FROM deliveries WHERE user_id=? AND sign=? AND date=?", (user_id, sign, today)).fetchone()
+                conn.close()
+                if sent: continue
+            except: pass
 
         info = SIGNS[sign]
-        preview_text = get_preview(sign)
-        text = f'{info["emoji"]} <b>{info["ua"]}. Гороскоп на сьогодні</b>\n\n{preview_text}'
+        preview = get_preview(sign)
+        
+        text = f'{info["emoji"]} <b>{info["ua"]}. Гороскоп на сьогодні</b>\n\n{preview}'
         url = f'https://www.citykey.com.ua/{info["slug"]}/?utm_source=telegram'
+        
         kb = telebot.types.InlineKeyboardMarkup()
-        kb.add(telebot.types.InlineKeyboardButton("Читати повністю", url=url))
+        kb.add(telebot.types.InlineKeyboardButton("Читати повний прогноз", url=url))
 
         try:
             bot.send_message(user_id, text, reply_markup=kb, disable_web_page_preview=True)
+            
+            # Помітка про доставку
             conn = sqlite3.connect(DB_NAME, timeout=20)
             conn.execute("INSERT OR IGNORE INTO deliveries (user_id, sign, date) VALUES (?,?,?)", (user_id, sign, today))
             conn.commit()
             conn.close()
-            print(f"УСПІШНО: {user_id}", flush=True)
-            time.sleep(0.1)
+            print(f"УСПІШНО надіслано користувачу {user_id}", flush=True)
+            time.sleep(0.1) # Затримка для лімітів Telegram
+            
         except ApiTelegramException as e:
-            print(f"ТЕЛЕГРАМ ПОМИЛКА {user_id}: {e.description}", flush=True)
+            if e.error_code == 409:
+                print("--- КРИТИЧНИЙ КОНФЛІКТ: Інший бот перехопив з'єднання! ---", flush=True)
+                return # Зупиняємо розсилку, бо токен зайнятий
+            print(f"Помилка Telegram для {user_id}: {e.description}", flush=True)
         except Exception as e:
-            print(f"ПОМИЛКА {user_id}: {e}", flush=True)
+            print(f"Загальна помилка для {user_id}: {e}", flush=True)
 
-    print(f"--- ЗАВЕРШЕНО ---", flush=True)
+    print(f"--- РОЗСИЛКА ЗАВЕРШЕНА ---", flush=True)
 
 if __name__ == "__main__":
-    force = len(sys.argv) > 1 and sys.argv[1] == "test"
-    broadcast(force_send=force)
+    # Аргумент 'test' дозволяє ігнорувати перевірку дати
+    is_test = len(sys.argv) > 1 and sys.argv[1] == "test"
+    broadcast(force_send=is_test)
