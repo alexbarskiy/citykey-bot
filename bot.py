@@ -12,52 +12,49 @@ from telebot import types
 # --- 1. ПРИМУСОВА ДІАГНОСТИКА ТА ОБХІД КЕШУ ---
 now = datetime.datetime.now().strftime("%H:%M:%S")
 
-# ПРІОРИТЕТ: спочатку шукаємо BOT_TOKEN, ігноруючи старий TOKEN, якщо можливо
-raw_token = os.getenv("BOT_TOKEN") or ""
-used_var_name = "BOT_TOKEN"
+# Спробуємо знайти всі можливі варіанти токена в системі
+env_vars = os.environ
+potential_tokens = {k: v for k, v in env_vars.items() if "TOKEN" in k.upper()}
 
-if not raw_token:
-    # Якщо BOT_TOKEN не знайдено, беремо TOKEN як запасний варіант
-    raw_token = os.getenv("TOKEN") or ""
-    used_var_name = "TOKEN"
+print(f"--- АНАЛІЗ СЕРЕДОВИЩА RAILWAY [{now}] ---", flush=True)
+print(f"Знайдено змінних, що містять 'TOKEN': {list(potential_tokens.keys())}", flush=True)
 
-# Очищення від невидимих символів
-TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', raw_token).strip()
+# ПРІОРИТЕТ: використовуємо тільки BOT_TOKEN, якщо він є
+TOKEN_RAW = os.getenv("BOT_TOKEN") or ""
+USED_VAR = "BOT_TOKEN"
 
-def verify_token(t, var_name):
-    print(f"--- ДІАГНОСТИКА СИСТЕМИ [{now}] ---", flush=True)
-    print(f"Використовується змінна: {var_name}", flush=True)
-    
-    # Виводимо всі змінні, щоб переконатися, що BOT_TOKEN додався
-    env_vars = list(os.environ.keys())
-    if "BOT_TOKEN" not in env_vars:
-        print("⚠️ УВАГА: Змінна 'BOT_TOKEN' НЕ ЗНАЙДЕНА в системі Railway!", flush=True)
-    if "TOKEN" in env_vars:
-        print("ℹ️ Знайдено стару змінну 'TOKEN'. Рекомендується її видалити.", flush=True)
+if not TOKEN_RAW:
+    print("⚠️ Попередження: BOT_TOKEN не знайдено. Перевіряємо застарілу змінну TOKEN...", flush=True)
+    TOKEN_RAW = os.getenv("TOKEN") or ""
+    USED_VAR = "TOKEN"
 
+# Жорстка чистка токена
+TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
+
+def verify_token_identity(t, name):
     if not t:
-        print(f"❌ ПОМИЛКА: Змінна {var_name} порожня!", flush=True)
+        print(f"❌ КРИТИЧНО: Жодна змінна токена не знайдена!", flush=True)
         return False
     
-    print(f"Зчитано токен довжиною {len(t)} символів.", flush=True)
-    print(f"Відбиток (перші 6): {t[:6]}... (останні 5): ...{t[-5:]}", flush=True)
+    print(f"Використовується: {name}", flush=True)
+    print(f"Відбиток: {t[:6]}...{t[-5:]}", flush=True)
     
     try:
-        response = requests.get(f"https://api.telegram.org/bot{t}/getMe", timeout=10)
-        result = response.json()
-        if result.get("ok"):
-            print(f"✅ УСПІХ! Telegram впізнав бота: @{result['result']['username']}", flush=True)
+        # Пряма перевірка через API Telegram
+        r = requests.get(f"https://api.telegram.org/bot{t}/getMe", timeout=10)
+        res = r.json()
+        if res.get("ok"):
+            print(f"✅ УСПІХ! Бот впізнаний: @{res['result']['username']}", flush=True)
             return True
         else:
-            print(f"❌ ВІДМОВА: Telegram каже Unauthorized (401).", flush=True)
-            print("Цей токен більше не дійсний. Потрібен новий Revoke в @BotFather.", flush=True)
+            print(f"❌ ВІДМОВА: Telegram каже {res.get('description')} (код {res.get('error_code')})", flush=True)
             return False
     except Exception as e:
         print(f"⚠️ Помилка зв'язку: {e}", flush=True)
         return False
 
-# Перевірка перед стартом
-is_active = verify_token(TOKEN, used_var_name)
+# Перевірка перед запуском
+token_ok = verify_token_identity(TOKEN, USED_VAR)
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # --- 2. ДАНІ ТА СТРУКТУРА ---
@@ -96,6 +93,7 @@ def init_db():
         c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
         conn.commit()
         conn.close()
+        print("💾 База даних готова.", flush=True)
     except Exception as e:
         print(f"❌ База: {e}")
 
@@ -187,8 +185,8 @@ def unsub_all_handler(m):
 # --- 6. ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
-    if not is_active:
-        print(f"🛑 ЗАПУСК ПЕРЕРВАНО:Railway не бачить новий BOT_TOKEN або він недійсний.", flush=True)
+    if not token_ok:
+        print(f"🛑 ЗАПУСК ПЕРЕРВАНО: Railway не оновив токен. Зараз у системі: {TOKEN[:5]}...{TOKEN[-5:]}", flush=True)
         sys.exit(1)
         
     print("🚀 Бот запущений успішно!", flush=True)
