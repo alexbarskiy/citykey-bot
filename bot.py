@@ -1,4 +1,3 @@
-# bot.py
 import os
 import datetime
 import sqlite3
@@ -50,6 +49,14 @@ def init_db() -> None:
             PRIMARY KEY (user_id, sign)
         )"""
     )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS deliveries (
+            user_id INTEGER,
+            sign TEXT,
+            date TEXT,
+            PRIMARY KEY (user_id, sign, date)
+        )"""
+    )
     conn.commit()
     conn.close()
 
@@ -94,7 +101,7 @@ def get_horoscope_preview(sign: str) -> str:
     info = SIGNS.get(sign, SIGNS["aries"])
     url = f'https://www.citykey.com.ua/{info["slug"]}/'
     try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+        r = requests.get(url, timeout=12)
         r.raise_for_status()
         soup = bs4.BeautifulSoup(r.text, "html.parser")
 
@@ -131,7 +138,6 @@ def horo_inline_kb(sign: str, user_id: int):
     url = f'https://www.citykey.com.ua/{info["slug"]}/?utm_source=telegram&utm_medium=bot&utm_campaign=horoscope&utm_content={sign}'
 
     kb = types.InlineKeyboardMarkup(row_width=2)
-
     kb.add(types.InlineKeyboardButton("Читати далі на сайті", url=url))
 
     if is_subscribed(user_id, sign):
@@ -139,9 +145,7 @@ def horo_inline_kb(sign: str, user_id: int):
     else:
         kb.add(types.InlineKeyboardButton("🔔 Підписатись на цей знак", callback_data=f"sub:{sign}"))
 
-    kb.add(
-        types.InlineKeyboardButton("♻️ Інший знак", callback_data="pick_sign")
-    )
+    kb.add(types.InlineKeyboardButton("♻️ Інший знак", callback_data="pick_sign"))
     return kb
 
 
@@ -158,7 +162,7 @@ def start(m):
 
     bot.send_message(
         m.chat.id,
-        "👋 Привіт. Обери свій знак і я дам короткий прогноз. Під самим прогнозом буде кнопка підписки на щоденні оновлення.",
+        "👋 Привіт. Обери знак і я дам короткий прогноз. Під прогнозом є кнопка підписки на щоденні оновлення.",
         reply_markup=sign_keyboard(),
     )
 
@@ -206,7 +210,7 @@ def cb_subscribe(c):
 
     if action == "sub":
         subscribe_user(c.from_user.id, sign)
-        msg = "Готово. Підписка активна. Щоденні розсилки підуть з Railway cron."
+        msg = "Готово. Підписка активна. Щоденні розсилки надійдуть один раз на день."
     else:
         unsubscribe_user(c.from_user.id, sign)
         msg = "Ок. Відписав від цього знака."
@@ -216,7 +220,6 @@ def cb_subscribe(c):
     except Exception:
         pass
 
-    info = SIGNS[sign]
     new_kb = horo_inline_kb(sign, c.from_user.id)
     try:
         bot.edit_message_reply_markup(
