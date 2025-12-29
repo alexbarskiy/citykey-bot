@@ -206,6 +206,18 @@ def cb_pick_sign(c):
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("sub:") or c.data.startswith("unsub:"))
+def ensure_user(user_id: int, first_name: str) -> None:
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO users (user_id, first_name, date) VALUES (?,?,?)",
+        (user_id, first_name, datetime.date.today().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sub:") or c.data.startswith("unsub:"))
 def cb_subscribe(c):
     data = c.data
     action, sign = data.split(":", 1)
@@ -217,15 +229,9 @@ def cb_subscribe(c):
             pass
         return
 
+    ensure_user(c.from_user.id, c.from_user.first_name)
+
     if action == "sub":
-            conn = sqlite3.connect(DB_NAME)
-    c2 = conn.cursor()
-    c2.execute(
-        "INSERT OR IGNORE INTO users (user_id, first_name, date) VALUES (?,?,?)",
-        (c.from_user.id, c.from_user.first_name, datetime.date.today().isoformat()),
-    )
-    conn.commit()
-    conn.close()
         subscribe_user(c.from_user.id, sign)
         msg = "Готово. Підписка активна. Щоденні розсилки надійдуть один раз на день."
     else:
@@ -246,6 +252,7 @@ def cb_subscribe(c):
         )
     except Exception:
         pass
+
 
 
 @bot.message_handler(func=lambda m: m.text == "🔔 Мої підписки")
@@ -286,5 +293,6 @@ if __name__ == "__main__":
     init_db()
     print("Bot started")
     bot.infinity_polling(skip_pending=True)
+
 
 
