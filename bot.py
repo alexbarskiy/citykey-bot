@@ -101,29 +101,38 @@ def get_horoscope_preview(sign: str) -> str:
     info = SIGNS.get(sign, SIGNS["aries"])
     url = f'https://www.citykey.com.ua/{info["slug"]}/'
     try:
-        r = requests.get(url, timeout=12)
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
         r.raise_for_status()
         soup = bs4.BeautifulSoup(r.text, "html.parser")
 
-        h3 = soup.find("h3")
-        if not h3:
-            return "Гороскоп оновлюється."
-
         parts = []
-        for p in h3.find_all_next("p", limit=6):
-            t = p.get_text(" ", strip=True)
-            if t:
-                parts.append(t)
+
+        h3 = soup.find("h3")
+        if h3:
+            for p in h3.find_all_next("p", limit=6):
+                t = p.get_text(" ", strip=True)
+                if t:
+                    parts.append(t)
+
+        if not parts:
+            for p in soup.find_all("p", limit=6):
+                t = p.get_text(" ", strip=True)
+                if t:
+                    parts.append(t)
 
         txt = " ".join(parts).strip()
+
         if not txt:
-            return "Гороскоп оновлюється."
+            return "Гороскоп скоро зʼявиться. Заходь трохи пізніше."
 
         if len(txt) > 600:
             txt = txt[:600].rsplit(" ", 1)[0] + "…"
+
         return txt
+
     except Exception:
-        return "Гороскоп оновлюється."
+        return "Гороскоп скоро зʼявиться. Заходь трохи пізніше."
+
 
 
 def sign_keyboard():
@@ -269,3 +278,4 @@ if __name__ == "__main__":
     init_db()
     print("Bot started")
     bot.infinity_polling(skip_pending=True)
+
