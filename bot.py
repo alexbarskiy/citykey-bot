@@ -218,6 +218,14 @@ def cb_subscribe(c):
         return
 
     if action == "sub":
+            conn = sqlite3.connect(DB_NAME)
+    c2 = conn.cursor()
+    c2.execute(
+        "INSERT OR IGNORE INTO users (user_id, first_name, date) VALUES (?,?,?)",
+        (c.from_user.id, c.from_user.first_name, datetime.date.today().isoformat()),
+    )
+    conn.commit()
+    conn.close()
         subscribe_user(c.from_user.id, sign)
         msg = "Готово. Підписка активна. Щоденні розсилки надійдуть один раз на день."
     else:
@@ -278,4 +286,5 @@ if __name__ == "__main__":
     init_db()
     print("Bot started")
     bot.infinity_polling(skip_pending=True)
+
 
