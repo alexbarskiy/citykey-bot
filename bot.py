@@ -12,40 +12,52 @@ from telebot import types
 # --- 1. ПРИМУСОВА ДІАГНОСТИКА ТА ОБХІД КЕШУ ---
 now = datetime.datetime.now().strftime("%H:%M:%S")
 
-# Ми змінюємо назву змінної з TOKEN на BOT_TOKEN, щоб змусити Railway оновити дані
-raw_token = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
+# ПРІОРИТЕТ: спочатку шукаємо BOT_TOKEN, ігноруючи старий TOKEN, якщо можливо
+raw_token = os.getenv("BOT_TOKEN") or ""
+used_var_name = "BOT_TOKEN"
+
+if not raw_token:
+    # Якщо BOT_TOKEN не знайдено, беремо TOKEN як запасний варіант
+    raw_token = os.getenv("TOKEN") or ""
+    used_var_name = "TOKEN"
+
+# Очищення від невидимих символів
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', raw_token).strip()
 
-def verify_token(t):
+def verify_token(t, var_name):
     print(f"--- ДІАГНОСТИКА СИСТЕМИ [{now}] ---", flush=True)
+    print(f"Використовується змінна: {var_name}", flush=True)
     
-    # Виводимо список усіх назв змінних, які бачить бот (без значень для безпеки)
+    # Виводимо всі змінні, щоб переконатися, що BOT_TOKEN додався
     env_vars = list(os.environ.keys())
-    print(f"Доступні змінні оточення: {', '.join(env_vars)}", flush=True)
-    
+    if "BOT_TOKEN" not in env_vars:
+        print("⚠️ УВАГА: Змінна 'BOT_TOKEN' НЕ ЗНАЙДЕНА в системі Railway!", flush=True)
+    if "TOKEN" in env_vars:
+        print("ℹ️ Знайдено стару змінну 'TOKEN'. Рекомендується її видалити.", flush=True)
+
     if not t:
-        print("❌ ПОМИЛКА: Змінна BOT_TOKEN або TOKEN порожня!", flush=True)
+        print(f"❌ ПОМИЛКА: Змінна {var_name} порожня!", flush=True)
         return False
     
     print(f"Зчитано токен довжиною {len(t)} символів.", flush=True)
     print(f"Відбиток (перші 6): {t[:6]}... (останні 5): ...{t[-5:]}", flush=True)
     
     try:
-        # Прямий запит до сервера Telegram
         response = requests.get(f"https://api.telegram.org/bot{t}/getMe", timeout=10)
         result = response.json()
         if result.get("ok"):
             print(f"✅ УСПІХ! Telegram впізнав бота: @{result['result']['username']}", flush=True)
             return True
         else:
-            print(f"❌ ВІДМОВА: Telegram каже Unauthorized для цього токена.", flush=True)
+            print(f"❌ ВІДМОВА: Telegram каже Unauthorized (401).", flush=True)
+            print("Цей токен більше не дійсний. Потрібен новий Revoke в @BotFather.", flush=True)
             return False
     except Exception as e:
         print(f"⚠️ Помилка зв'язку: {e}", flush=True)
         return False
 
 # Перевірка перед стартом
-is_active = verify_token(TOKEN)
+is_active = verify_token(TOKEN, used_var_name)
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # --- 2. ДАНІ ТА СТРУКТУРА ---
@@ -176,7 +188,7 @@ def unsub_all_handler(m):
 if __name__ == "__main__":
     init_db()
     if not is_active:
-        print(f"🛑 ЗАПУСК ПЕРЕРВАНО: Спробуйте видалити змінну TOKEN та додати BOT_TOKEN заново.", flush=True)
+        print(f"🛑 ЗАПУСК ПЕРЕРВАНО:Railway не бачить новий BOT_TOKEN або він недійсний.", flush=True)
         sys.exit(1)
         
     print("🚀 Бот запущений успішно!", flush=True)
