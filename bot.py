@@ -1,52 +1,38 @@
 # bot.py
-import os
-import datetime
-import sqlite3
-import requests
-import bs4
-import telebot
-import sys
-import re
-import time
-import threading
-import random
-import urllib.parse
+import os, sys, datetime, sqlite3, requests, bs4, telebot, re, time, threading, random, urllib.parse, traceback
 from telebot import types
 
-# ---------------- 1. НАЛАШТУВАННЯ ТА ТОКЕН ----------------
-# Пріоритет на FINAL_BOT_TOKEN для уникнення проблем з кешем Railway
+# --------------- 1. НАЛАШТУВАННЯ ТА ТОКЕН ---------------
 TOKEN_RAW = os.getenv("FINAL_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
-TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
+TOKEN = re.sub(r'[^a-zA-Z0-9:_\-]', '', TOKEN_RAW).strip()
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
+ADMIN_ID = 0          # ← свій Telegram-ID (число)
 
-# ВСТАВТЕ СВІЙ ID ТУТ (отримайте у @userinfobot)
-ADMIN_ID = 564858074
-
-# Шаблон персоналізованого VIP-посилання (БЕЗ ПРОБІЛІВ!)
+# VIP-посилання (без пробілів)
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?name={name}&sign={sign}"
 
+print(f"TOKEN length: {len(TOKEN) or 0}", flush=True)
 if not TOKEN:
     print("❌ КРИТИЧНО: TOKEN не знайдено в Variables!", flush=True)
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# ---------------- 2. ДАНІ ТА СТРУКТУРИ ----------------
+# --------------- 2. ДАНІ ---------------
 SIGNS = {
-    "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
-    "taurus":      {"emoji": "♉", "ua": "Тілець",    "slug": "horoskop-telec"},
-    "gemini":      {"emoji": "♊", "ua": "Близнюки",  "slug": "horoskop-bliznyu"},
-    "cancer":      {"emoji": "♋", "ua": "Рак",       "slug": "horoskop-rak"},
-    "leo":         {"emoji": "♌", "ua": "Лев",       "slug": "horoskop-lev"},
-    "virgo":       {"emoji": "♍", "ua": "Діва",      "slug": "horoskop-diva"},
-    "libra":       {"emoji": "♎", "ua": "Терези",    "slug": "horoskop-terez"},
-    "scorpio":     {"emoji": "♏", "ua": "Скорпіон",  "slug": "horoskop-skorpion"},
-    "sagittarius": {"emoji": "♐", "ua": "Стрілець",  "slug": "horoskop-strilec"},
-    "capricorn":   {"emoji": "♑", "ua": "Козеріг",   "slug": "horoskop-kozerig"},
-    "aquarius":    {"emoji": "♒", "ua": "Водолій",   "slug": "horoskop-vodoliy"},
-    "pisces":      {"emoji": "♓", "ua": "Риби",      "slug": "horoskop-ryby"},
+    "aries": {"emoji": "♈", "ua": "Овен", "slug": "horoskop-oven"},
+    "taurus": {"emoji": "♉", "ua": "Тілець", "slug": "horoskop-telec"},
+    "gemini": {"emoji": "♊", "ua": "Близнюки", "slug": "horoskop-bliznyu"},
+    "cancer": {"emoji": "♋", "ua": "Рак", "slug": "horoskop-rak"},
+    "leo": {"emoji": "♌", "ua": "Лев", "slug": "horoskop-lev"},
+    "virgo": {"emoji": "♍", "ua": "Діва", "slug": "horoskop-diva"},
+    "libra": {"emoji": "♎", "ua": "Терези", "slug": "horoskop-terez"},
+    "scorpio": {"emoji": "♏", "ua": "Скорпіон", "slug": "horoskop-skorpion"},
+    "sagittarius": {"emoji": "♐", "ua": "Стрілець", "slug": "horoskop-strilec"},
+    "capricorn": {"emoji": "♑", "ua": "Козеріг", "slug": "horoskop-kozerig"},
+    "aquarius": {"emoji": "♒", "ua": "Водолій", "slug": "horoskop-vodoliy"},
+    "pisces": {"emoji": "♓", "ua": "Риби", "slug": "horoskop-ryby"},
 }
-
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
@@ -54,48 +40,36 @@ BTN_MY_SUBS = "🔔 Мої підписки"
 BTN_VIP_STATUS = "💎 VIP Статус / Друзі"
 BTN_UNSUB_ALL = "🔕 Відписатись від всього"
 
-# ---------------- 3. РОБОТА З БАЗОЮ ДАНИХ ----------------
+# --------------- 3. БАЗА ДАНИХ ---------------
 def get_db():
-    return sqlite3.connect(DB_NAME, timeout=30)
+    return sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
 
 def init_db():
     try:
-        db_dir = os.path.dirname(DB_NAME)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
-
+        os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
         conn = get_db()
         c = conn.cursor()
-        c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT, username TEXT, referrer_id INTEGER)")
         c.execute("CREATE TABLE IF NOT EXISTS subs (user_id INTEGER, sign TEXT, PRIMARY KEY (user_id, sign))")
         c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
         c.execute("CREATE TABLE IF NOT EXISTS feedback (user_id INTEGER, date TEXT, rate TEXT)")
-
-        cols = [info[1] for info in c.execute("PRAGMA table_info(users)").fetchall()]
-        if 'referrer_id' not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN referrer_id INTEGER")
-        if 'username' not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN username TEXT")
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
         print("💾 База даних синхронізована.", flush=True)
     except Exception as e:
-        print(f"❌ Помилка бази: {e}", flush=True)
+        print(f"❌ Помилка бази: {e}", flush=True); raise
 
-# ---------------- 4. ЛОГІКА КОНТЕНТУ ----------------
+# --------------- 4. КОНТЕНТ ---------------
 def get_compatibility(sign_key):
     random.seed(int(datetime.date.today().strftime("%Y%m%d")) + len(sign_key))
-    compat_key = random.choice(list(SIGNS.keys()))
-    return f"💖 <b>Сумісність дня:</b> найкраще взаємодіяти з <b>{SIGNS[compat_key]['ua']}</b>"
+    return f"💖 <b>Сумісність дня:</b> найкраще взаємодіяти з <b>{SIGNS[random.choice(list(SIGNS.keys()))]['ua']}</b>"
 
 def fetch_horo(sign_key):
-    url = f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'   # ← ПРОБІЛ ПРИБРАНО
+    url = f"https://www.citykey.com.ua/{SIGNS[sign_key]['slug']}/"
     try:
-        r = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         soup = bs4.BeautifulSoup(r.text, "html.parser")
         content = soup.select_one(".entry-content")
-        if not content:
-            return "Прогноз на сьогодні вже на нашому сайті!"
+        if not content: return "Прогноз на сьогодні вже на нашому сайті!"
         paragraphs = content.find_all("p")
         txt = " ".join([p.get_text().strip() for p in paragraphs if len(p.get_text()) > 25][:2])
         return (txt[:550] + "...") if len(txt) > 550 else (txt or "Читати далі на сайті.")
@@ -103,7 +77,7 @@ def fetch_horo(sign_key):
         print(f"Scraping error for {sign_key}: {e}", flush=True)
         return "Детальний прогноз на сьогодні вже опубліковано на сайті citykey.com.ua"
 
-# ---------------- 5. КЛАВІАТУРИ ----------------
+# --------------- 5. КЛАВІАТУРИ ---------------
 def main_kb():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
@@ -113,201 +87,141 @@ def main_kb():
 
 def inline_kb(sign_key, uid, text_to_share):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("📖 Читати повністю", url=f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'))
-
+    markup.add(types.InlineKeyboardButton("📖 Читати повністю", url=f"https://www.citykey.com.ua/{SIGNS[sign_key]['slug']}/"))
     conn = get_db()
     is_sub = conn.execute("SELECT 1 FROM subs WHERE user_id=? AND sign=?", (uid, sign_key)).fetchone()
     conn.close()
-
-    sub_text = "🔕 Відписатися" if is_sub else "🔔 Отримувати щодня"
-    sub_data = f"unsub:{sign_key}" if is_sub else f"sub:{sign_key}"
-
-    ref_link = f"https://t.me/City_Key_Bot?start={uid}"                       # ← ПРОБІЛ ПРИБРАНО
+    sub_text, sub_data = (("🔕 Відписатися", f"unsub:{sign_key}") if is_sub else ("🔔 Отримувати щодня", f"sub:{sign_key}"))
+    ref_link = f"https://t.me/City_Key_Bot?start={uid}"
     share_msg = f"Мій гороскоп ({SIGNS[sign_key]['ua']}):\n\n{text_to_share}\n\nДізнайся свій тут 👇"
     share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(share_msg)}"
-
-    markup.add(
-        types.InlineKeyboardButton(sub_text, callback_data=sub_data),
-        types.InlineKeyboardButton("🚀 Поділитися", url=share_url)
-    )
-    markup.row(types.InlineKeyboardButton("👍 Лайк", callback_data="rate:up"),
-               types.InlineKeyboardButton("👎 Дизлайк", callback_data="rate:down"))
+    markup.add(types.InlineKeyboardButton(sub_text, callback_data=sub_data), types.InlineKeyboardButton("🚀 Поділитися", url=share_url))
+    markup.row(types.InlineKeyboardButton("👍 Лайк", callback_data="rate:up"), types.InlineKeyboardButton("👎 Дизлайк", callback_data="rate:down"))
     return markup
 
-# ---------------- 6. ОБРОБНИКИ ----------------
-@bot.message_handler(commands=['start'])
+# --------------- 6. ХЕНДЛЕРИ ---------------
+@bot.message_handler(commands=["start"])
 def cmd_start(m):
-    user_id = m.from_user.id
-    name = m.from_user.first_name or "друг"
-    username = m.from_user.username
-    referrer_id = None
-
+    uid, name, uname = m.from_user.id, m.from_user.first_name or "друг", m.from_user.username
+    ref = None
     if len(m.text.split()) > 1:
-        ref_candidate = m.text.split()[1]
-        if ref_candidate.isdigit() and int(ref_candidate) != user_id:
-            referrer_id = int(ref_candidate)
-
+        rc = m.text.split()[1]
+        if rc.isdigit() and int(rc) != uid: ref = int(rc)
     conn = get_db()
-    user_exists = conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
-    if not user_exists:
-        conn.execute(
-            "INSERT INTO users (user_id, first_name, username, date, referrer_id) VALUES (?,?,?,?,?)",
-            (user_id, name, username, datetime.date.today().isoformat(), referrer_id)
-        )
+    if not conn.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone():
+        conn.execute("INSERT INTO users(user_id,first_name,username,date,referrer_id) VALUES(?,?,?,?,?)",
+                     (uid, name, uname, datetime.date.today().isoformat(), ref))
         conn.commit()
-        if referrer_id:
-            try:
-                bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач приєднався за вашим посиланням. Це зараховано для VIP!")
-            except:
-                pass
+        if ref:
+            try: bot.send_message(ref, "🎉 Новий користувач приєднався за вашим посиланням!")
+            except: pass
     else:
-        conn.execute("UPDATE users SET username=?, first_name=? WHERE user_id=?", (username, name, user_id))
+        conn.execute("UPDATE users SET first_name=?, username=? WHERE user_id=?", (name, uname, uid))
         conn.commit()
     conn.close()
-    bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак зодіаку:", reply_markup=main_kb())
+    bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак:", reply_markup=main_kb())
 
-@bot.message_handler(commands=['stats'])
+@bot.message_handler(commands=["stats"])
 def cmd_stats(m):
-    if ADMIN_ID != 0 and m.from_user.id != ADMIN_ID:
-        return
+    if ADMIN_ID and m.from_user.id != ADMIN_ID: return
     conn = get_db()
-    u = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    s = conn.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
+    u, s = [conn.execute("SELECT COUNT(*) FROM "+t).fetchone()[0] for t in ("users","subs")]
     conn.close()
     bot.send_message(m.chat.id, f"📊 <b>АДМІН-СТАТИСТИКА:</b>\n👥 Користувачів: {u}\n🔔 Підписок: {s}")
 
 @bot.message_handler(func=lambda m: True)
-def central_handler(m):
-    text = m.text.strip()
-    uid = m.from_user.id
-
-    if text in UA_TO_KEY:
-        key = UA_TO_KEY[text]
-        bot.send_chat_action(m.chat.id, 'typing')
-        txt = fetch_horo(key)
-        compat = get_compatibility(key)
-        bot.send_message(m.chat.id, f"✨ <b>{text}</b>\n\n{txt}\n\n{compat}",
-                         reply_markup=inline_kb(key, uid, txt), disable_web_page_preview=True)
+def central(m):
+    txt, uid = m.text.strip(), m.from_user.id
+    if txt in UA_TO_KEY:
+        key = UA_TO_KEY[txt]
+        bot.send_chat_action(m.chat.id, "typing")
+        h = fetch_horo(key); c = get_compatibility(key)
+        bot.send_message(m.chat.id, f"✨ <b>{txt}</b>\n\n{h}\n\n{c}", reply_markup=inline_kb(key, uid, h), disable_web_page_preview=True)
         return
-
-    if "підписки" in text.lower() or "подписки" in text.lower():
+    if "підписки" in txt.lower() or "подписки" in txt.lower():
         conn = get_db()
         rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (uid,)).fetchall()
         conn.close()
         if not rows:
-            bot.send_message(m.chat.id, "У вас немає активних підписок. Оберіть знак і натисніть «Отримувати щодня».")
+            bot.send_message(m.chat.id, "У вас немає активних підписок.")
         else:
-            txt = "<b>Ваші активні підписки:</b>\n" + \
-                  "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
-            bot.send_message(m.chat.id, txt)
+            bot.send_message(m.chat.id, "<b>Ваші активні підписки:</b>\n" +
+                              "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS]))
         return
-
-    if "vip" in text.lower() or "статус" in text.lower() or "друзі" in text.lower():
+    if "vip" in txt.lower() or "статус" in txt.lower() or "друзі" in txt.lower():
         conn = get_db()
-        count = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (uid,)).fetchone()[0]
+        cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (uid,)).fetchone()[0]
         sub = conn.execute("SELECT sign FROM subs WHERE user_id=? LIMIT 1", (uid,)).fetchone()
         conn.close()
-
         sign_ua = SIGNS[sub[0]]["ua"] if sub else "Гороскоп"
-        ref_link = f"https://t.me/City_Key_Bot?start={uid}"                    # ← ПРОБІЛ ПРИБРАНО
-        is_admin = (ADMIN_ID != 0 and uid == ADMIN_ID)
-
-        if count >= 3 or is_admin:
-            encoded_name = urllib.parse.quote(m.from_user.first_name)
-            encoded_sign = urllib.parse.quote(sign_ua)
-            personal_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
-            bot.send_message(m.chat.id,
-                             f"🌟 <b>ВАШ СТАТУС: VIP</b>\n\nВи запросили {count} друзів! "
-                             f"Твій персональний VIP-прогноз тут:\n\n👉 <a href='{personal_link}'>ВІДКРИТИ ПРЕМІУМ</a>",
+        ref_link = f"https://t.me/City_Key_Bot?start={uid}"
+        is_admin = (ADMIN_ID and uid == ADMIN_ID)
+        if cnt >= 3 or is_admin:
+            personal = VIP_LINK_TEMPLATE.format(name=urllib.parse.quote(m.from_user.first_name),
+                                                sign=urllib.parse.quote(sign_ua))
+            bot.send_message(m.chat.id, f"🌟 <b>ВАШ СТАТУС: VIP</b>\n\nЗапросили {cnt} друзів!\n👉 <a href='{personal}'>ВІДКРИТИ ПРЕМІУМ</a>",
                              disable_web_page_preview=True)
         else:
-            bot.send_message(m.chat.id,
-                             f"💎 Запросіть ще {3 - count} друзів для VIP-статусу!\n\n"
-                             f"🔗 Твоє посилання для запрошення:\n<code>{ref_link}</code>")
+            bot.send_message(m.chat.id, f"💎 Запросіть ще {3-cnt} друзів!\n🔗 Посилання:\n<code>{ref_link}</code>")
         return
-
-    if "відписатись" in text.lower() or "отписаться" in text.lower():
+    if "відписатись" in txt.lower() or "отписаться" in txt.lower():
         conn = get_db()
-        conn.execute("DELETE FROM subs WHERE user_id=?", (uid,))
-        conn.commit()
-        conn.close()
+        conn.execute("DELETE FROM subs WHERE user_id=?", (uid,)); conn.commit(); conn.close()
         bot.send_message(m.chat.id, "Ви відписалися від усіх розсилок.")
 
-# ---------------- 7. CALLBACKS ----------------
+# --------------- 7. CALLBACK ---------------
 @bot.callback_query_handler(func=lambda c: True)
-def callback_handler(c):
+def inline_handler(c):
     uid = c.from_user.id
-    if c.data.startswith('rate:'):
-        bot.answer_callback_query(c.id, "Дякуємо за відгук!")
-        return
-
-    if c.data.startswith(('sub:', 'unsub:')):
-        act, key = c.data.split(':')
+    if c.data.startswith("rate:"):
+        bot.answer_callback_query(c.id, "Дякуємо за відгук!"); return
+    if c.data.startswith(("sub:", "unsub:")):
+        act, key = c.data.split(":")
         conn = get_db()
-        if act == "sub":
-            conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (uid, key))
-        else:
-            conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (uid, key))
-        conn.commit()
-        conn.close()
+        if act == "sub": conn.execute("INSERT OR IGNORE INTO subs VALUES(?,?)", (uid, key))
+        else: conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (uid, key))
+        conn.commit(); conn.close()
         bot.answer_callback_query(c.id, "Оновлено!")
-        try:
-            # перевантажуємо клавіатуру, щоб кнопка змінила підпис
-            bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id,
-                                          reply_markup=inline_kb(key, uid, c.message.text or ""))
-        except:
-            pass
+        try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, uid, c.message.text or ""))
+        except: pass
 
-# ---------------- 8. ЩОДЕННА РОЗСИЛКА (07:00 UTC = 09:00 Київ) ----------------
-def newsletter_thread():
+# --------------- 8. РОЗСИЛКА (07:00 UTC) ---------------
+def newsletter():
     while True:
         try:
             now = datetime.datetime.now()
-            if now.hour == 7:                       # 07:00 UTC
-                is_sunday = now.weekday() == 6
-                today = now.strftime("%Y-%m-%d")
+            if now.hour == 7:
+                today, is_sun = now.strftime("%Y-%m-%d"), now.weekday()==6
                 conn = get_db()
-                to_send = conn.execute("""
-                    SELECT s.user_id, s.sign FROM subs s
-                    LEFT JOIN deliveries d ON s.user_id = d.user_id AND s.sign = d.sign AND d.date = ?
-                    WHERE d.user_id IS NULL
-                """, (today,)).fetchall()
-                for uid, skey in to_send:
+                rows = conn.execute("SELECT s.user_id, s.sign FROM subs s LEFT JOIN deliveries d ON s.user_id=d.user_id AND s.sign=d.sign AND d.date=? WHERE d.user_id IS NULL", (today,)).fetchall()
+                for uid, skey in rows:
                     try:
-                        if is_sunday:
-                            text = f"📅 <b>ЧАС ПЛАНУВАТИ ТИЖДЕНЬ!</b>\n\n" \
-                                   f"Великий прогноз для знака {SIGNS[skey]['ua']} вже доступний на нашому сайті."
-                            kb = types.InlineKeyboardMarkup()
-                            kb.add(types.InlineKeyboardButton("✨ Дивитись прогноз",
-                                                              url="https://www.citykey.com.ua/weekly-horoscope/"))
+                        if is_sun:
+                            txt = f"📅 <b>ЧАС ПЛАНУВАТИ ТИЖДЕНЬ!</b>\nВеликий прогноз для {SIGNS[skey]['ua']} вже на сайті."
+                            kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("✨ Дивитись", url="https://www.citykey.com.ua/weekly-horoscope/"))
                         else:
-                            txt = fetch_horo(skey)
-                            compat = get_compatibility(skey)
-                            text = f"☀️ <b>Добрий ранок! Твій прогноз для {SIGNS[skey]['ua']}:</b>\n\n{txt}\n\n{compat}"
-                            kb = inline_kb(skey, uid, txt)
-                        bot.send_message(uid, text, reply_markup=kb, disable_web_page_preview=True)
-                        conn.execute("INSERT INTO deliveries VALUES (?,?,?)", (uid, skey, today))
-                        conn.commit()
-                        time.sleep(0.1)
-                    except:
-                        pass
+                            h = fetch_horo(skey); c = get_compatibility(skey)
+                            txt = f"☀️ <b>Добрий ранок! Твій прогноз для {SIGNS[skey]['ua']}:</b>\n\n{h}\n\n{c}"
+                            kb = inline_kb(skey, uid, h)
+                        bot.send_message(uid, txt, reply_markup=kb, disable_web_page_preview=True)
+                        conn.execute("INSERT INTO deliveries VALUES(?,?,?)", (uid, skey, today)); conn.commit()
+                        time.sleep(.1)
+                    except: pass
                 conn.close()
-            time.sleep(1800)        # 30 хв
-        except:
-            time.sleep(60)
+            time.sleep(1800)
+        except: time.sleep(60)
 
-# ---------------- 9. ЗАПУСК ----------------
+# --------------- 9. СТАРТ + ЗАХИСТ ВІД КРАШІВ ---------------
 if __name__ == "__main__":
-    print("⏳ Очікування стабілізації Railway (20 сек)...", flush=True)
-    time.sleep(20)
-    init_db()
-    print("🚀 Бот City Key намагається підключитися до Telegram...", flush=True)
-    threading.Thread(target=newsletter_thread, daemon=True).start()
-    while True:
-        try:
-            me = bot.get_me()
-            print(f"✅ УСПІХ! Бот @{me.username} онлайн.", flush=True)
-            bot.polling(none_stop=True, timeout=90, long_polling_timeout=90)
-        except Exception as e:
-            print(f"⚠️ Помилка з'єднання: {e}. Перезапуск через 15 сек...", flush=True)
-            time.sleep(15)
+    try:
+        print("⏳ Очікування стабілізації Railway (20 сек)...", flush=True); time.sleep(20)
+        init_db()
+        print("🚀 Бот намагається підключитися до Telegram...", flush=True)
+        threading.Thread(target=newsletter, daemon=True).start()
+        me = bot.get_me()
+        print(f"✅ УСПІХ! Бот @{me.username} онлайн.", flush=True)
+        bot.polling(none_stop=True, timeout=90, long_polling_timeout=90)
+    except Exception as e:
+        print(f"!!! Критична помилка: {e}", flush=True)
+        traceback.print_exc()
+        time.sleep(15)
