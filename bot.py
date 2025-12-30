@@ -10,17 +10,42 @@ import time
 import threading
 from telebot import types
 
-# --- 1. НАЛАШТУВАННЯ ---
-TOKEN_RAW = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
-TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
-DB_NAME = os.getenv("DB_PATH", "data/stats.db")
-ADMIN_ID = 0  # Вставте свій ID
+# --- 1. ПРИМУСОВА ДІАГНОСТИКА ТОКЕНА ---
+# Ми беремо BOT_TOKEN як основний. Якщо його немає — беремо TOKEN.
+raw_token = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
+# Очищаємо від усього зайвого (пробіли, лапки)
+TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', raw_token).strip()
 
-if not TOKEN:
-    print("❌ КРИТИЧНО: TOKEN не знайдено!", flush=True)
-    sys.exit(1)
+def check_token_on_start(t):
+    print("--- ДІАГНОСТИКА ТОКЕНА ---", flush=True)
+    if not t:
+        print("❌ ПОМИЛКА: Токен не знайдено в системних змінних Railway!", flush=True)
+        return False
+    
+    # Виводимо початок і кінець, щоб користувач міг звірити
+    print(f"Довжина токена: {len(t)} символів.")
+    print(f"Відбиток: {t[:6]}...{t[-5:]}", flush=True)
+    
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{t}/getMe", timeout=10)
+        res = r.json()
+        if res.get("ok"):
+            print(f"✅ УСПІХ! Telegram впізнав бота: @{res['result']['username']}", flush=True)
+            return True
+        else:
+            print(f"❌ ВІДМОВА Telegram (401): {res.get('description')}", flush=True)
+            return False
+    except Exception as e:
+        print(f"⚠️ Помилка зв'язку з API: {e}", flush=True)
+        return False
 
+# Спроба перевірки
+is_token_valid = check_token_on_start(TOKEN)
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
+
+# --- 2. КОНСТАНТИ ТА БАЗА ---
+DB_NAME = os.getenv("DB_PATH", "data/stats.db")
+ADMIN_ID = 0  # <--- ВСТАВТЕ ВАШ ID СЮДИ!
 
 SIGNS = {
     "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
@@ -40,7 +65,6 @@ SIGNS = {
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
-# --- 2. БАЗА ДАНИХ ---
 def get_db():
     return sqlite3.connect(DB_NAME, timeout=30)
 
@@ -56,9 +80,11 @@ def init_db():
         c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
         conn.commit()
         conn.close()
+        print(f"💾 База даних готова: {DB_NAME}", flush=True)
     except Exception as e:
         print(f"❌ Помилка бази: {e}", flush=True)
 
+# --- 3. ЛОГІКА ТА РОЗСИЛКА ---
 def fetch_horoscope(sign_key):
     url = f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'
     try:
@@ -66,58 +92,46 @@ def fetch_horoscope(sign_key):
         r = requests.get(url, timeout=15, headers=headers)
         soup = bs4.BeautifulSoup(r.text, "html.parser")
         content = soup.select_one(".entry-content")
-        if not content: return "Прогноз на сайті!"
+        if not content: return "Прогноз на сьогодні вже на сайті!"
         paragraphs = content.find_all("p")
         text_parts = [p.get_text().strip() for p in paragraphs if len(p.get_text()) > 30]
         full_text = " ".join(text_parts[:2]).strip()
-        return (full_text[:580] + "...") if len(full_text) > 600 else (full_text or "Прогноз уже на сайті!")
+        return (full_text[:580] + "...") if len(full_text) > 600 else (full_text or "Читати повний прогноз на сайті.")
     except:
         return "Детальний прогноз на сьогодні вже опубліковано на сайті."
 
-# --- 3. ФУНКЦІЯ РОЗСИЛКИ ---
-def run_newsletter():
-    """Фонова функція для щоденної розсилки"""
-    print("⏰ Планувальник розсилки запущено.", flush=True)
+def newsletter_thread():
+    print("⏰ Потік розсилки запущено.", flush=True)
     while True:
         try:
+            # Розсилка о 08:00 (Київ +2/3 від UTC)
             now = datetime.datetime.now()
-            # Налаштуйте годину розсилки (наприклад, 8 ранку)
-            if now.hour == 6:
+            if now.hour == 6: # 06:00 UTC = 08:00 за Києвом взимку
                 today_str = now.strftime("%Y-%m-%d")
                 conn = get_db()
-                # Беремо всіх, кому ще не відправляли сьогодні
                 to_send = conn.execute("""
-                    SELECT s.user_id, s.sign 
-                    FROM subs s 
+                    SELECT s.user_id, s.sign FROM subs s 
                     LEFT JOIN deliveries d ON s.user_id = d.user_id AND s.sign = d.sign AND d.date = ?
                     WHERE d.user_id IS NULL
                 """, (today_str,)).fetchall()
                 
                 if to_send:
-                    print(f"📤 Починаю розсилку для {len(to_send)} підписок...", flush=True)
-                    for uid, sign_key in to_send:
+                    print(f"📤 Відправка {len(to_send)} прогнозів...", flush=True)
+                    for uid, skey in to_send:
                         try:
-                            text = fetch_horoscope(sign_key)
-                            bot.send_message(
-                                uid, 
-                                f"☀️ <b>Доброго ранку! Твій прогноз на сьогодні:</b>\n\n✨ <b>{SIGNS[sign_key]['emoji']} {SIGNS[sign_key]['ua']}</b>\n\n{text}",
-                                disable_web_page_preview=True
-                            )
-                            # Фіксуємо успішну відправку
-                            conn.execute("INSERT INTO deliveries VALUES (?,?,?)", (uid, sign_key, today_str))
+                            txt = fetch_horoscope(skey)
+                            bot.send_message(uid, f"☀️ <b>Добрий ранок! Твій прогноз:</b>\n\n✨ <b>{SIGNS[skey]['ua']}</b>\n\n{txt}", disable_web_page_preview=True)
+                            conn.execute("INSERT INTO deliveries VALUES (?,?,?)", (uid, skey, today_str))
                             conn.commit()
-                            time.sleep(0.1) # Захист від спам-фільтра Telegram
-                        except Exception as e:
-                            print(f"⚠️ Не вдалося відправити {uid}: {e}")
+                            time.sleep(0.1)
+                        except: pass
                 conn.close()
-            
-            # Чекаємо 30 хвилин до наступної перевірки
-            time.sleep(1800)
+            time.sleep(1800) # Перевірка кожні 30 хв
         except Exception as e:
-            print(f"❌ Помилка у фоновій розсилці: {e}", flush=True)
+            print(f"Помилка розсилки: {e}")
             time.sleep(60)
 
-# --- 4. КЛАВІАТУРИ ТА ОБРОБНИКИ ---
+# --- 4. КЛАВІАТУРИ ТА ХЕНДЛЕРИ ---
 def main_kb():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
@@ -126,13 +140,13 @@ def main_kb():
 
 def inline_kb(sign_key, uid):
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("Повний прогноз на сайті", url=f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'))
+    markup.add(types.InlineKeyboardButton("Повний прогноз", url=f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'))
     conn = get_db()
     is_sub = conn.execute("SELECT 1 FROM subs WHERE user_id=? AND sign=?", (uid, sign_key)).fetchone()
     conn.close()
-    btn_text = "🔕 Відписатися" if is_sub else "🔔 Отримувати щодня"
-    btn_data = f"unsub:{sign_key}" if is_sub else f"sub:{sign_key}"
-    markup.add(types.InlineKeyboardButton(btn_text, callback_data=btn_data))
+    text = "🔕 Відписатися" if is_sub else "🔔 Отримувати щодня"
+    data = f"unsub:{sign_key}" if is_sub else f"sub:{sign_key}"
+    markup.add(types.InlineKeyboardButton(text, callback_data=data))
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -179,7 +193,7 @@ def my_subs(m):
     rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (m.from_user.id,)).fetchall()
     conn.close()
     if not rows:
-        bot.send_message(m.chat.id, "У вас немає підписок.")
+        bot.send_message(m.chat.id, "У вас немає активних підписок.")
         return
     txt = "<b>Ваші підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
     bot.send_message(m.chat.id, txt)
@@ -195,16 +209,19 @@ def unsub_all(m):
 # --- 5. ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
-    # Запуск розсилки в окремому потоці, щоб не заважати боту відповідати
-    threading.Thread(target=run_newsletter, daemon=True).start()
+    if not is_token_valid:
+        print("🛑 ЗАПУСК ПЕРЕРВАНО: Неправильний токен. Оновіть Variables та зробіть Redeploy.", flush=True)
+        sys.exit(1)
+        
+    threading.Thread(target=newsletter_thread, daemon=True).start()
+    print("🚀 Бот запущений успішно!", flush=True)
     
-    print("🚀 Бот увімкнений.", flush=True)
     while True:
         try:
             bot.infinity_polling(skip_pending=True, timeout=60)
         except Exception as e:
             if "409" in str(e):
-                print("⚠️ Конфлікт токенів. Спроба через 10 сек...", flush=True)
-                time.sleep(10)
+                print("⚠️ Конфлікт (409). Чекаємо 15 сек...", flush=True)
+                time.sleep(15)
             else:
                 time.sleep(5)
