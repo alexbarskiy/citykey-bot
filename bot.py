@@ -13,15 +13,22 @@ import urllib.parse
 from flask import Flask
 from telebot import types
 
-# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER (ОБОВ'ЯЗКОВО) ---
+# --- 1. ВЕБ-СЕРВЕР ДЛЯ "ПРОБУДЖЕННЯ" (RENDER) ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "City Key Bot is Online and Functional!", 200
+    # Цей текст ви побачите, якщо перейдете за посиланням вашого бота в браузері
+    return "City Key Bot is Active! 🚀", 200
+
+@app.route('/ping')
+def ping():
+    # Спеціальний шлях для cron-job.org
+    print(f"💓 ПІНГ: Отримано сигнал пробудження о {datetime.datetime.now().strftime('%H:%M:%S')}", flush=True)
+    return "PONG", 200
 
 def run_flask():
-    # Render призначає порт автоматично
+    # Render автоматично призначає порт у змінну PORT
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
@@ -35,7 +42,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
 
 if not TOKEN:
-    print("❌ КРИТИЧНО: TOKEN не знайдено!", flush=True)
+    print("❌ КРИТИЧНО: TOKEN не знайдено! Перевірте вкладку Environment на Render.", flush=True)
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
@@ -168,11 +175,9 @@ def vip_status(m):
     
     is_admin = (ADMIN_ID != 0 and uid == ADMIN_ID)
     if count >= 3 or is_admin:
-        # ПРАВИЛЬНЕ ФОРМУВАННЯ ПОСИЛАННЯ (З АНГЛІЙСЬКИМ КЛЮЧЕМ)
         sign_key = sub[0] if sub else 'aries'
         encoded_name = urllib.parse.quote(m.from_user.first_name)
         encoded_sign = urllib.parse.quote(sign_key) 
-        
         personal_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
         
         bot.send_message(
@@ -207,12 +212,12 @@ def callback_handler(c):
         try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, uid, ""))
         except: pass
 
-# --- 8. РОЗСИЛКА (Щодня о 09:00 за Києвом) ---
+# --- 8. РОЗСИЛКА ---
 def newsletter_thread():
     while True:
         try:
             now = datetime.datetime.now()
-            if now.hour == 7: # 07:00 UTC = 09:00 за Києвом
+            if now.hour == 7: 
                 is_sunday = now.weekday() == 6
                 today = now.strftime("%Y-%m-%d")
                 conn = sqlite3.connect(DB_NAME)
@@ -236,18 +241,16 @@ def newsletter_thread():
                             conn.commit()
                         except: pass
                 conn.close()
-            time.sleep(1800) # Перевірка кожні 30 хв
+            time.sleep(1800)
         except: time.sleep(60)
 
 # --- 9. ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
-    # Запуск веб-сервера (для Render)
     threading.Thread(target=run_flask, daemon=True).start()
-    # Запуск розсилки
     threading.Thread(target=newsletter_thread, daemon=True).start()
     
-    print("🚀 Бот City Key v4.1 (VIP Fix) запущений!", flush=True)
+    print("🚀 Бот City Key v4.2 (Render Alive) запущений!", flush=True)
     while True:
         try:
             bot.polling(none_stop=True, timeout=60)
