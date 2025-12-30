@@ -12,22 +12,32 @@ import random
 import urllib.parse
 from telebot import types
 
-# --- 1. НАЛАШТУВАННЯ ---
+# --- 1. НАЛАШТУВАННЯ ТА ПЕРЕВІРКА ТОКЕНА ---
 TOKEN_RAW = os.getenv("FINAL_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
 
-# ВСТАВТЕ СВІЙ ID ТУТ!
+# ВСТАВТЕ СВІЙ ID ТУТ! (обов'язково для команди /stats)
 ADMIN_ID = 0  
 
 # Шаблон VIP-посилання
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
 
 if not TOKEN:
-    print("❌ КРИТИЧНО: TOKEN не знайдено!", flush=True)
+    print("❌ КРИТИЧНО: TOKEN не знайдено в системних змінних Railway!", flush=True)
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
+
+# Перевірка з'єднання при запуску
+def verify_connection():
+    try:
+        me = bot.get_me()
+        print(f"✅ ПІДКЛЮЧЕНО ДО TELEGRAM: @{me.username}", flush=True)
+        return True
+    except Exception as e:
+        print(f"❌ ПОМИЛКА ПІДКЛЮЧЕННЯ: {e}", flush=True)
+        return False
 
 SIGNS = {
     "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
@@ -151,7 +161,7 @@ def start(m):
         )
         conn.commit()
         if referrer_id:
-            try: bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач приєднався!")
+            try: bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач приєднався за вашим посиланням!")
             except: pass
     else:
         conn.execute("UPDATE users SET username=?, first_name=? WHERE user_id=?", (username, name, user_id))
@@ -235,7 +245,7 @@ def callback_handler(c):
         try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, uid, ""))
         except: pass
 
-# --- 7. РОЗСИЛКА ---
+# --- 7. ФОНОВІ ПОТОКИ ---
 def newsletter_thread():
     while True:
         try:
@@ -267,26 +277,28 @@ def newsletter_thread():
             time.sleep(1800)
         except: time.sleep(60)
 
+# Потік для логування "Я живий" кожні 5 хвилин
+def heartbeat_thread():
+    while True:
+        print(f"💓 Heartbeat: Бот працює. Час: {datetime.datetime.now().strftime('%H:%M:%S')}", flush=True)
+        time.sleep(300)
+
 if __name__ == "__main__":
     init_db()
-    threading.Thread(target=newsletter_thread, daemon=True).start()
-    print("🚀 Бот City Key v2.9 (Network Stability Fix) запущений!", flush=True)
     
-    # ПРИМУСОВИЙ ЦИКЛ З ОБРОБКОЮ ТАЙМАУТІВ МЕРЕЖІ
+    # Перевірка токена перед запуском
+    if not verify_connection():
+        print("🛑 СТОП: Бот не зміг з'єднатися з Telegram API. Перевірте токен!", flush=True)
+        sys.exit(1)
+        
+    threading.Thread(target=newsletter_thread, daemon=True).start()
+    threading.Thread(target=heartbeat_thread, daemon=True).start()
+    
+    print("🚀 Бот City Key v3.0 запущений успішно!", flush=True)
+    
     while True:
         try:
-            bot.infinity_polling(
-                skip_pending=True, 
-                timeout=60,             # Таймаут очікування апдейтів
-                long_polling_timeout=60 # Довгий таймаут для стабільності
-            )
-        except requests.exceptions.ReadTimeout:
-            # Ігноруємо таймаут мережі, Railway іноді лагає
-            time.sleep(1)
-        except requests.exceptions.ConnectionError:
-            # Якщо мережа зовсім впала, чекаємо трохи довше
-            time.sleep(5)
+            bot.polling(none_stop=True, timeout=90, long_polling_timeout=90)
         except Exception as e:
-            # Для всіх інших помилок
-            print(f"Polling error: {e}", flush=True)
+            print(f"⚠️ Polling error: {e}. Перезапуск через 5 секунд...", flush=True)
             time.sleep(5)
