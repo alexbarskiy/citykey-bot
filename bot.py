@@ -16,9 +16,11 @@ from telebot import types
 TOKEN_RAW = os.getenv("FINAL_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
-ADMIN_ID = 0  # <--- ВСТАВТЕ ВАШ ID ТУТ!
 
-# Шаблон VIP-посилання з параметрами
+# ВСТАВТЕ СВІЙ ID ТУТ! (отримайте у @userinfobot)
+ADMIN_ID = 0  
+
+# Шаблон VIP-посилання
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
 
 if not TOKEN:
@@ -45,7 +47,7 @@ SIGNS = {
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
-# Назви кнопок для зручності та уникнення помилок
+# Кнопки (використовуємо змінні для стабільності)
 BTN_MY_SUBS = "🔔 Мої підписки"
 BTN_VIP_STATUS = "💎 VIP Статус / Друзі"
 BTN_UNSUB_ALL = "🔕 Відписатись від всього"
@@ -59,7 +61,6 @@ def init_db():
         db_dir = os.path.dirname(DB_NAME)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
-        
         conn = get_db()
         c = conn.cursor()
         c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT)")
@@ -76,8 +77,9 @@ def init_db():
             c.execute("ALTER TABLE users ADD COLUMN username TEXT")
             conn.commit()
         conn.close()
+        print(f"💾 База даних синхронізована: {DB_NAME}", flush=True)
     except Exception as e:
-        print(f"❌ Помилка бази: {e}", flush=True)
+        print(f"❌ Помилка ініціалізації бази: {e}", flush=True)
 
 # --- 3. ЛОГІКА ТРАФІКУ ---
 def get_compatibility(sign_key):
@@ -128,7 +130,8 @@ def inline_kb(sign_key, uid, full_text_for_share):
     markup.row(types.InlineKeyboardButton("👍", callback_data="rate:up"), types.InlineKeyboardButton("👎", callback_data="rate:down"))
     return markup
 
-# --- 5. ХЕНДЛЕРИ ---
+# --- 5. ОБРОБНИКИ ПОВІДОМЛЕНЬ ---
+
 @bot.message_handler(commands=['start'])
 def start(m):
     user_id = m.from_user.id
@@ -136,6 +139,8 @@ def start(m):
     username = m.from_user.username
     referrer_id = None
     
+    print(f"[START] Нове з'єднання: ID={user_id}, Name={name}", flush=True)
+
     if len(m.text.split()) > 1:
         ref_candidate = m.text.split()[1]
         if ref_candidate.isdigit() and int(ref_candidate) != user_id:
@@ -150,60 +155,13 @@ def start(m):
         )
         conn.commit()
         if referrer_id:
-            try: bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач {name} приєднався за вашим посиланням. Це зараховано для вашого VIP-статусу!")
+            try: bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач {name} приєднався. Це зараховано для вашого VIP-статусу!")
             except: pass
     else:
         conn.execute("UPDATE users SET username=?, first_name=? WHERE user_id=?", (username, name, user_id))
         conn.commit()
     conn.close()
     bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак зодіаку:", reply_markup=main_kb())
-
-@bot.message_handler(func=lambda m: m.text == BTN_VIP_STATUS)
-def vip_status(m):
-    user_id = m.from_user.id
-    conn = get_db()
-    count = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (user_id,)).fetchone()[0]
-    sub = conn.execute("SELECT sign FROM subs WHERE user_id=? LIMIT 1", (user_id,)).fetchone()
-    conn.close()
-    
-    sign_ua = SIGNS[sub[0]]["ua"] if sub else "Гороскоп"
-    ref_link = f"https://t.me/City_Key_Bot?start={user_id}"
-    
-    if count >= 3:
-        encoded_name = urllib.parse.quote(m.from_user.first_name)
-        encoded_sign = urllib.parse.quote(sign_ua)
-        personal_vip_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
-        status_text = f"🌟 <b>Ваш статус: VIP</b>\n\nВи запросили {count} друзів! Ваш персональний преміум-прогноз готовий:\n\n👉 <a href='{personal_vip_link}'>ВІДКРИТИ ПРЕМІУМ</a>"
-    else:
-        status_text = f"💎 <b>Ваш статус: Користувач</b>\n\nЗапросіть ще {3 - count} друзів, щоб отримати <b>VIP-статус</b> та доступ до прихованих прогнозів!\n\n🔗 Ваше посилання для запрошення:\n<code>{ref_link}</code>"
-    
-    bot.send_message(m.chat.id, status_text, disable_web_page_preview=True)
-
-@bot.message_handler(func=lambda m: m.text in UA_TO_KEY)
-def sign_handler(m):
-    key = UA_TO_KEY[m.text]
-    txt = fetch_horo(key)
-    compat = get_compatibility(key)
-    bot.send_message(m.chat.id, f"✨ <b>{m.text}</b>\n\n{txt}\n\n{compat}", reply_markup=inline_kb(key, m.from_user.id, txt), disable_web_page_preview=True)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith('rate:'))
-def handle_rate(c):
-    bot.answer_callback_query(c.id, "Дякуємо за ваш відгук!")
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith(('sub:', 'unsub:')))
-def handle_sub(c):
-    act, key = c.data.split(':')
-    conn = get_db()
-    if act == "sub":
-        conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (c.from_user.id, key))
-        bot.answer_callback_query(c.id, "Підписку оформлено!")
-    else:
-        conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (c.from_user.id, key))
-        bot.answer_callback_query(c.id, "Підписку скасовано.")
-    conn.commit()
-    conn.close()
-    try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, c.from_user.id, ""))
-    except: pass
 
 @bot.message_handler(commands=['stats'])
 def stats(m):
@@ -214,26 +172,91 @@ def stats(m):
     conn.close()
     bot.send_message(m.chat.id, f"📊 <b>АДМІН-СТАТИСТИКА:</b>\n👥 Користувачів: {u}\n🔔 Підписок: {s}")
 
-@bot.message_handler(func=lambda m: m.text == BTN_MY_SUBS)
-def my_subs(m):
-    conn = get_db()
-    rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (m.from_user.id,)).fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(m.chat.id, "У вас немає активних підписок. Оберіть знак зодіаку та натисніть «Отримувати щодня».")
+# ЄДИНИЙ ОБРОБНИК ДЛЯ ВСІХ ТЕКСТОВИХ ПОВІДОМЛЕНЬ ТА КНОПОК
+@bot.message_handler(func=lambda m: True)
+def central_handler(m):
+    text = m.text.strip()
+    uid = m.from_user.id
+    
+    print(f"[LOG] Отримано текст: '{text}' від {uid}", flush=True)
+
+    # 1. Перевірка на знаки зодіаку (UA_TO_KEY)
+    if text in UA_TO_KEY:
+        key = UA_TO_KEY[text]
+        txt = fetch_horo(key)
+        compat = get_compatibility(key)
+        bot.send_message(m.chat.id, f"✨ <b>{text}</b>\n\n{txt}\n\n{compat}", reply_markup=inline_kb(key, uid, txt), disable_web_page_preview=True)
         return
-    txt = "<b>Ваші активні підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
-    bot.send_message(m.chat.id, txt)
 
-@bot.message_handler(func=lambda m: m.text == BTN_UNSUB_ALL)
-def unsub_all(m):
-    conn = get_db()
-    conn.execute("DELETE FROM subs WHERE user_id=?", (m.from_user.id,))
-    conn.commit()
-    conn.close()
-    bot.send_message(m.chat.id, "Ви відписалися від усіх розсилок.")
+    # 2. Кнопка "Мої підписки"
+    if "підписки" in text.lower():
+        print(f"[ACTION] Перегляд підписок для {uid}", flush=True)
+        conn = get_db()
+        rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (uid,)).fetchall()
+        conn.close()
+        if not rows:
+            bot.send_message(m.chat.id, "У вас немає активних підписок. Оберіть знак зодіаку та натисніть «Отримувати щодня».")
+        else:
+            txt = "<b>Ваші активні підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
+            bot.send_message(m.chat.id, txt)
+        return
 
-# --- 6. РОЗСИЛКА ---
+    # 3. Кнопка "VIP Статус"
+    if "vip" in text.lower() or "статус" in text.lower():
+        conn = get_db()
+        count = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (uid,)).fetchone()[0]
+        sub = conn.execute("SELECT sign FROM subs WHERE user_id=? LIMIT 1", (uid,)).fetchone()
+        conn.close()
+        
+        sign_ua = SIGNS[sub[0]]["ua"] if sub else "Гороскоп"
+        ref_link = f"https://t.me/City_Key_Bot?start={uid}"
+        
+        if count >= 3:
+            encoded_name = urllib.parse.quote(m.from_user.first_name)
+            encoded_sign = urllib.parse.quote(sign_ua)
+            personal_vip_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
+            status_text = f"🌟 <b>Ваш статус: VIP</b>\n\nВи запросили {count} друзів!\n\n👉 <a href='{personal_vip_link}'>ВІДКРИТИ ПРЕМІУМ</a>"
+        else:
+            status_text = f"💎 <b>Ваш статус: Користувач</b>\n\nЗапросіть ще {3 - count} друзів для <b>VIP-статусу</b>!\n\n🔗 Твоє посилання:\n<code>{ref_link}</code>"
+        
+        bot.send_message(m.chat.id, status_text, disable_web_page_preview=True)
+        return
+
+    # 4. Кнопка "Відписатись"
+    if "відписатись" in text.lower():
+        conn = get_db()
+        conn.execute("DELETE FROM subs WHERE user_id=?", (uid,))
+        conn.commit()
+        conn.close()
+        bot.send_message(m.chat.id, "Ви відписалися від усіх розсилок.")
+        return
+
+# --- 6. CALLBACKS (INLINE BUTTONS) ---
+@bot.callback_query_handler(func=lambda c: True)
+def callback_handler(c):
+    data = c.data
+    uid = c.from_user.id
+    
+    if data.startswith('rate:'):
+        bot.answer_callback_query(c.id, "Дякуємо за ваш відгук!")
+        return
+
+    if data.startswith(('sub:', 'unsub:')):
+        act, key = data.split(':')
+        conn = get_db()
+        if act == "sub":
+            conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (uid, key))
+            bot.answer_callback_query(c.id, "Ви підписалися!")
+        else:
+            conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (uid, key))
+            bot.answer_callback_query(c.id, "Відписано.")
+        conn.commit()
+        conn.close()
+        # Оновлення кнопок
+        try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, uid, ""))
+        except: pass
+
+# --- 7. РОЗСИЛКА ---
 def newsletter_thread():
     while True:
         try:
@@ -251,13 +274,13 @@ def newsletter_thread():
                     for uid, skey in to_send:
                         try:
                             if is_sunday:
-                                text = f"📅 <b>ЧАС ПЛАНУВАТИ ТИЖДЕНЬ!</b>\n\nВеликий прогноз для знака {SIGNS[skey]['ua']} вже доступний на нашому сайті."
+                                text = f"📅 <b>ЧАС ПЛАНУВАТИ ТИЖДЕНЬ!</b>\n\nПрогноз на тиждень уже на сайті."
                                 kb = types.InlineKeyboardMarkup()
-                                kb.add(types.InlineKeyboardButton("✨ Дивитись прогноз", url="https://www.citykey.com.ua/weekly-horoscope/"))
+                                kb.add(types.InlineKeyboardButton("✨ Дивитись", url="https://www.citykey.com.ua/weekly-horoscope/"))
                             else:
                                 txt = fetch_horo(skey)
                                 compat = get_compatibility(skey)
-                                text = f"☀️ <b>Добрий ранок! Твій прогноз для {SIGNS[skey]['ua']}:</b>\n\n{txt}\n\n{compat}"
+                                text = f"☀️ <b>Добрий ранок! Прогноз для {SIGNS[skey]['ua']}:</b>\n\n{txt}\n\n{compat}"
                                 kb = inline_kb(skey, uid, txt)
                             bot.send_message(uid, text, reply_markup=kb, disable_web_page_preview=True)
                             conn.execute("INSERT INTO deliveries VALUES (?,?,?)", (uid, skey, today))
@@ -271,5 +294,5 @@ def newsletter_thread():
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=newsletter_thread, daemon=True).start()
-    print("🚀 Бот City Key v2.5 (Fixed Buttons) запущений!", flush=True)
+    print("🚀 Бот City Key v2.6 (Central Handler) запущений!", flush=True)
     bot.infinity_polling(skip_pending=True)
