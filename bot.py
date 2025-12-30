@@ -45,6 +45,11 @@ SIGNS = {
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
+# Назви кнопок для зручності та уникнення помилок
+BTN_MY_SUBS = "🔔 Мої підписки"
+BTN_VIP_STATUS = "💎 VIP Статус / Друзі"
+BTN_UNSUB_ALL = "🔕 Відписатись від всього"
+
 # --- 2. БАЗА ДАНИХ ---
 def get_db():
     return sqlite3.connect(DB_NAME, timeout=30)
@@ -97,8 +102,8 @@ def fetch_horo(sign_key):
 def main_kb():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
-    markup.row(types.KeyboardButton("💎 VIP Статус / Друзі"), types.KeyboardButton("🔔 Мої підписки"))
-    markup.row(types.KeyboardButton("🔕 Відписатись від всього"))
+    markup.row(types.KeyboardButton(BTN_VIP_STATUS), types.KeyboardButton(BTN_MY_SUBS))
+    markup.row(types.KeyboardButton(BTN_UNSUB_ALL))
     return markup
 
 def inline_kb(sign_key, uid, full_text_for_share):
@@ -112,7 +117,6 @@ def inline_kb(sign_key, uid, full_text_for_share):
     sub_text = "🔕 Відписатися" if is_sub else "🔔 Отримувати щодня"
     sub_data = f"unsub:{sign_key}" if is_sub else f"sub:{sign_key}"
     
-    # ТЕПЕР share_url містить реферальне посилання користувача (?start=uid)
     ref_link = f"https://t.me/City_Key_Bot?start={uid}"
     share_msg = f"Мій гороскоп ({SIGNS[sign_key]['ua']}):\n\n{full_text_for_share}\n\nДізнайся свій тут 👇"
     share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(share_msg)}"
@@ -154,7 +158,7 @@ def start(m):
     conn.close()
     bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак зодіаку:", reply_markup=main_kb())
 
-@bot.message_handler(func=lambda m: m.text == "💎 VIP Статус / Друзі")
+@bot.message_handler(func=lambda m: m.text == BTN_VIP_STATUS)
 def vip_status(m):
     user_id = m.from_user.id
     conn = get_db()
@@ -210,18 +214,18 @@ def stats(m):
     conn.close()
     bot.send_message(m.chat.id, f"📊 <b>АДМІН-СТАТИСТИКА:</b>\n👥 Користувачів: {u}\n🔔 Підписок: {s}")
 
-@bot.message_handler(func=lambda m: m.text == "🔔 Мої підписки")
+@bot.message_handler(func=lambda m: m.text == BTN_MY_SUBS)
 def my_subs(m):
     conn = get_db()
     rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (m.from_user.id,)).fetchall()
     conn.close()
     if not rows:
-        bot.send_message(m.chat.id, "У вас немає активних підписок.")
+        bot.send_message(m.chat.id, "У вас немає активних підписок. Оберіть знак зодіаку та натисніть «Отримувати щодня».")
         return
     txt = "<b>Ваші активні підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
     bot.send_message(m.chat.id, txt)
 
-@bot.message_handler(func=lambda m: m.text == "🔕 Відписатись від всього")
+@bot.message_handler(func=lambda m: m.text == BTN_UNSUB_ALL)
 def unsub_all(m):
     conn = get_db()
     conn.execute("DELETE FROM subs WHERE user_id=?", (m.from_user.id,))
@@ -267,5 +271,5 @@ def newsletter_thread():
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=newsletter_thread, daemon=True).start()
-    print("🚀 Бот City Key v2.4 (Smart Share) запущений!", flush=True)
+    print("🚀 Бот City Key v2.5 (Fixed Buttons) запущений!", flush=True)
     bot.infinity_polling(skip_pending=True)
