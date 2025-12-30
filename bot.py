@@ -12,12 +12,12 @@ import random
 import urllib.parse
 from telebot import types
 
-# --- 1. НАЛАШТУВАННЯ ТА ПЕРЕВІРКА ТОКЕНА ---
+# --- 1. НАЛАШТУВАННЯ ---
 TOKEN_RAW = os.getenv("FINAL_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
 
-# ВСТАВТЕ СВІЙ ID ТУТ! (обов'язково для команди /stats)
+# ВСТАВТЕ СВІЙ ID ТУТ!
 ADMIN_ID = 0  
 
 # Шаблон VIP-посилання
@@ -29,15 +29,19 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# Перевірка з'єднання при запуску
-def verify_connection():
-    try:
-        me = bot.get_me()
-        print(f"✅ ПІДКЛЮЧЕНО ДО TELEGRAM: @{me.username}", flush=True)
-        return True
-    except Exception as e:
-        print(f"❌ ПОМИЛКА ПІДКЛЮЧЕННЯ: {e}", flush=True)
-        return False
+# Покращена перевірка з'єднання з ретраями
+def verify_connection(retries=5, delay=5):
+    print(f"📡 Перевірка зв'язку з Telegram (спроб: {retries})...", flush=True)
+    for i in range(retries):
+        try:
+            me = bot.get_me()
+            print(f"✅ ПІДКЛЮЧЕНО: @{me.username}", flush=True)
+            return True
+        except Exception as e:
+            print(f"⚠️ Спроба {i+1}/{retries} не вдалася: {e}", flush=True)
+            if i < retries - 1:
+                time.sleep(delay)
+    return False
 
 SIGNS = {
     "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
@@ -277,28 +281,29 @@ def newsletter_thread():
             time.sleep(1800)
         except: time.sleep(60)
 
-# Потік для логування "Я живий" кожні 5 хвилин
 def heartbeat_thread():
     while True:
-        print(f"💓 Heartbeat: Бот працює. Час: {datetime.datetime.now().strftime('%H:%M:%S')}", flush=True)
+        try:
+            print(f"💓 Heartbeat: {datetime.datetime.now().strftime('%H:%M:%S')}", flush=True)
+        except: pass
         time.sleep(300)
 
 if __name__ == "__main__":
     init_db()
     
-    # Перевірка токена перед запуском
-    if not verify_connection():
-        print("🛑 СТОП: Бот не зміг з'єднатися з Telegram API. Перевірте токен!", flush=True)
+    # Спроба підключитися 5 разів з паузою 10 секунд
+    if not verify_connection(retries=5, delay=10):
+        print("🛑 СТОП: Мережа Telegram недоступна після 5 спроб. Спробуйте Redeploy.", flush=True)
         sys.exit(1)
         
     threading.Thread(target=newsletter_thread, daemon=True).start()
     threading.Thread(target=heartbeat_thread, daemon=True).start()
     
-    print("🚀 Бот City Key v3.0 запущений успішно!", flush=True)
+    print("🚀 Бот City Key v3.1 запущений!", flush=True)
     
     while True:
         try:
             bot.polling(none_stop=True, timeout=90, long_polling_timeout=90)
         except Exception as e:
-            print(f"⚠️ Polling error: {e}. Перезапуск через 5 секунд...", flush=True)
+            print(f"⚠️ Polling error: {e}", flush=True)
             time.sleep(5)
