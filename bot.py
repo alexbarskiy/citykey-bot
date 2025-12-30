@@ -47,7 +47,7 @@ bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # --- 2. БАЗА ДАНИХ ТА КОНСТАНТИ ---
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
-ADMIN_ID = 0  # ВСТАВТЕ ВАШ ID ТУТ
+ADMIN_ID = 564858074  # ВСТАВТЕ ВАШ ID ТУТ
 
 SIGNS = {
     "aries":       {"emoji": "♈", "ua": "Овен",      "slug": "horoskop-oven"},
@@ -225,3 +225,4 @@ if __name__ == "__main__":
                 time.sleep(15)
             else:
                 time.sleep(5)
+
