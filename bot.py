@@ -17,9 +17,8 @@ TOKEN_RAW = os.getenv("FINAL_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv(
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
 
-# ВСТАВТЕ СВІЙ ID ТУТ! (Обов'язково для тестування VIP без друзів)
-# Отримати ID можна у бота @userinfobot
-ADMIN_ID = 564858074  
+# ВСТАВТЕ СВІЙ ID ТУТ!
+ADMIN_ID = 0  
 
 # Шаблон VIP-посилання
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
@@ -152,13 +151,13 @@ def start(m):
         )
         conn.commit()
         if referrer_id:
-            try: bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач приєднався за вашим посиланням!")
+            try: bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач приєднався!")
             except: pass
     else:
         conn.execute("UPDATE users SET username=?, first_name=? WHERE user_id=?", (username, name, user_id))
         conn.commit()
     conn.close()
-    bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак зодіаку:", reply_markup=main_kb())
+    bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак:", reply_markup=main_kb())
 
 @bot.message_handler(commands=['stats'])
 def stats(m):
@@ -166,18 +165,14 @@ def stats(m):
     conn = get_db()
     u = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     s = conn.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
-    # Скільки запросив сам адмін
-    my_refs = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (m.from_user.id,)).fetchone()[0]
     conn.close()
-    
-    bot.send_message(m.chat.id, f"📊 <b>АДМІН-ПАНЕЛЬ:</b>\n👥 Користувачів: {u}\n🔔 Підписок: {s}\n💎 Ваші реферали: {my_refs}\n\n<i>(Як Адмін, ви бачите VIP-кнопку незалежно від кількості рефералів)</i>")
+    bot.send_message(m.chat.id, f"📊 Статистика: {u} юзерів, {s} підписок.")
 
 @bot.message_handler(func=lambda m: True)
 def central_handler(m):
     text = m.text.strip()
     uid = m.from_user.id
     
-    # 1. Знаки зодіаку
     if text in UA_TO_KEY:
         key = UA_TO_KEY[text]
         txt = fetch_horo(key)
@@ -185,7 +180,6 @@ def central_handler(m):
         bot.send_message(m.chat.id, f"✨ <b>{text}</b>\n\n{txt}\n\n{compat}", reply_markup=inline_kb(key, uid, txt), disable_web_page_preview=True)
         return
 
-    # 2. Мої підписки
     if "підписки" in text.lower() or "подписки" in text.lower():
         conn = get_db()
         rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (uid,)).fetchall()
@@ -193,11 +187,10 @@ def central_handler(m):
         if not rows:
             bot.send_message(m.chat.id, "У вас немає активних підписок.")
         else:
-            txt = "<b>Ваші активні підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
+            txt = "<b>Ваші підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
             bot.send_message(m.chat.id, txt)
         return
 
-    # 3. VIP Статус (З ОБХОДОМ ДЛЯ АДМІНА)
     if "vip" in text.lower() or "статус" in text.lower() or "друзі" in text.lower():
         conn = get_db()
         count = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (uid,)).fetchone()[0]
@@ -206,25 +199,17 @@ def central_handler(m):
         
         sign_ua = SIGNS[sub[0]]["ua"] if sub else "Гороскоп"
         ref_link = f"https://t.me/City_Key_Bot?start={uid}"
-        
-        # УМОВА ТЕСТУВАННЯ: Якщо це ви (Адмін), бот пропустить вас далі
         is_admin = (ADMIN_ID != 0 and uid == ADMIN_ID)
         
         if count >= 3 or is_admin:
             encoded_name = urllib.parse.quote(m.from_user.first_name)
             encoded_sign = urllib.parse.quote(sign_ua)
             personal_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
-            
-            msg = f"🌟 <b>ВАШ СТАТУС: VIP {'(Admin Test)' if is_admin and count < 3 else ''}</b>\n\nВи отримали доступ до преміум-розділу:\n\n👉 <a href='{personal_link}'>ВІДКРИТИ ПРЕМІУМ</a>"
-            if is_admin and count < 3:
-                msg += f"\n\n<i>Примітка: Ви бачите це, бо ви Адмін. Звичайні юзери побачать це лише після 3 запрошень (зараз у вас {count}).</i>"
-            
-            bot.send_message(m.chat.id, msg, disable_web_page_preview=True)
+            bot.send_message(m.chat.id, f"🌟 <b>ВАШ СТАТУС: VIP</b>\n\n👉 <a href='{personal_link}'>ВІДКРИТИ ПРЕМІУМ</a>", disable_web_page_preview=True)
         else:
             bot.send_message(m.chat.id, f"💎 Запросіть ще {3 - count} друзів для VIP!\n\n🔗 Твоє посилання:\n<code>{ref_link}</code>")
         return
 
-    # 4. Відписка
     if "відписатись" in text.lower() or "отписаться" in text.lower():
         conn = get_db()
         conn.execute("DELETE FROM subs WHERE user_id=?", (uid,))
@@ -285,6 +270,23 @@ def newsletter_thread():
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=newsletter_thread, daemon=True).start()
-    print("🚀 Бот City Key v2.8 (Admin Test) запущений!", flush=True)
-    bot.infinity_polling(skip_pending=True)
-
+    print("🚀 Бот City Key v2.9 (Network Stability Fix) запущений!", flush=True)
+    
+    # ПРИМУСОВИЙ ЦИКЛ З ОБРОБКОЮ ТАЙМАУТІВ МЕРЕЖІ
+    while True:
+        try:
+            bot.infinity_polling(
+                skip_pending=True, 
+                timeout=60,             # Таймаут очікування апдейтів
+                long_polling_timeout=60 # Довгий таймаут для стабільності
+            )
+        except requests.exceptions.ReadTimeout:
+            # Ігноруємо таймаут мережі, Railway іноді лагає
+            time.sleep(1)
+        except requests.exceptions.ConnectionError:
+            # Якщо мережа зовсім впала, чекаємо трохи довше
+            time.sleep(5)
+        except Exception as e:
+            # Для всіх інших помилок
+            print(f"Polling error: {e}", flush=True)
+            time.sleep(5)
