@@ -45,7 +45,7 @@ SIGNS = {
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
-# --- 2. БАЗА ДАНИХ (ПІДТРИМКА 5 КОЛОНОК) ---
+# --- 2. БАЗА ДАНИХ ---
 def get_db():
     return sqlite3.connect(DB_NAME, timeout=30)
 
@@ -57,33 +57,22 @@ def init_db():
         
         conn = get_db()
         c = conn.cursor()
-        
-        # Початкове створення (базова структура)
         c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT)")
         c.execute("CREATE TABLE IF NOT EXISTS subs (user_id INTEGER, sign TEXT, PRIMARY KEY (user_id, sign))")
         c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
         c.execute("CREATE TABLE IF NOT EXISTS feedback (user_id INTEGER, date TEXT, rate TEXT)")
         
-        # --- МІГРАЦІЯ СТРУКТУРИ ---
         c.execute("PRAGMA table_info(users)")
         columns = [info[1] for info in c.fetchall()]
-        
-        # Додаємо 4-ту колонку (referrer_id)
         if 'referrer_id' not in columns:
-            print("🔧 База: додавання referrer_id", flush=True)
             c.execute("ALTER TABLE users ADD COLUMN referrer_id INTEGER")
             conn.commit()
-            
-        # Додаємо 5-ту колонку (username)
         if 'username' not in columns:
-            print("🔧 База: додавання username", flush=True)
             c.execute("ALTER TABLE users ADD COLUMN username TEXT")
             conn.commit()
-            
         conn.close()
-        print(f"💾 База даних синхронізована (5 колонок): {DB_NAME}", flush=True)
     except Exception as e:
-        print(f"❌ Помилка ініціалізації бази: {e}", flush=True)
+        print(f"❌ Помилка бази: {e}", flush=True)
 
 # --- 3. ЛОГІКА ТРАФІКУ ---
 def get_compatibility(sign_key):
@@ -102,13 +91,13 @@ def fetch_horo(sign_key):
         txt = " ".join([item.get_text().strip() for item in p if len(item.get_text()) > 25][:2])
         return (txt[:550] + "...") if len(txt) > 550 else (txt or "Читати далі на сайті.")
     except:
-        return "Детальний прогноз уже опубліковано на нашому сайті."
+        return "Детальний прогноз уже на сайті."
 
 # --- 4. КЛАВІАТУРИ ---
 def main_kb():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
-    markup.row(types.KeyboardButton("💎 VIP Статус / Друзі"), types.KeyboardButton("🔔 Мої подписки"))
+    markup.row(types.KeyboardButton("💎 VIP Статус / Друзі"), types.KeyboardButton("🔔 Мої підписки"))
     markup.row(types.KeyboardButton("🔕 Відписатись від всього"))
     return markup
 
@@ -123,8 +112,10 @@ def inline_kb(sign_key, uid, full_text_for_share):
     sub_text = "🔕 Відписатися" if is_sub else "🔔 Отримувати щодня"
     sub_data = f"unsub:{sign_key}" if is_sub else f"sub:{sign_key}"
     
-    share_text = f"Мій гороскоп ({SIGNS[sign_key]['ua']}):\n\n{full_text_for_share}\n\nДізнайся свій тут 👇"
-    share_url = f"https://t.me/share/url?url=https://t.me/City_Key_Bot&text={urllib.parse.quote(share_text)}"
+    # ТЕПЕР share_url містить реферальне посилання користувача (?start=uid)
+    ref_link = f"https://t.me/City_Key_Bot?start={uid}"
+    share_msg = f"Мій гороскоп ({SIGNS[sign_key]['ua']}):\n\n{full_text_for_share}\n\nДізнайся свій тут 👇"
+    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(share_msg)}"
     
     markup.add(
         types.InlineKeyboardButton(sub_text, callback_data=sub_data),
@@ -149,18 +140,16 @@ def start(m):
     conn = get_db()
     user_exists = conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
     if not user_exists:
-        # Вказуємо конкретні назви колонок для 5 значень
         conn.execute(
             "INSERT INTO users (user_id, first_name, username, date, referrer_id) VALUES (?,?,?,?,?)", 
             (user_id, name, username, datetime.date.today().isoformat(), referrer_id)
         )
         conn.commit()
         if referrer_id:
-            try: bot.send_message(referrer_id, f"🎉 У вас новий реферал! {name} (@{username if username else 'без імені'}) приєднався.")
+            try: bot.send_message(referrer_id, f"🎉 Вітаємо! Новий користувач {name} приєднався за вашим посиланням. Це зараховано для вашого VIP-статусу!")
             except: pass
     else:
-        # Оновлюємо username, якщо він змінився
-        conn.execute("UPDATE users SET username=? WHERE user_id=?", (username, user_id))
+        conn.execute("UPDATE users SET username=?, first_name=? WHERE user_id=?", (username, name, user_id))
         conn.commit()
     conn.close()
     bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак зодіаку:", reply_markup=main_kb())
@@ -180,9 +169,9 @@ def vip_status(m):
         encoded_name = urllib.parse.quote(m.from_user.first_name)
         encoded_sign = urllib.parse.quote(sign_ua)
         personal_vip_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
-        status_text = f"🌟 <b>Ваш статус: VIP</b>\n\nВи запросили {count} друзів! Твій персональний VIP-прогноз тут:\n\n👉 <a href='{personal_vip_link}'>ВІДКРИТИ ПРЕМІУМ</a>"
+        status_text = f"🌟 <b>Ваш статус: VIP</b>\n\nВи запросили {count} друзів! Ваш персональний преміум-прогноз готовий:\n\n👉 <a href='{personal_vip_link}'>ВІДКРИТИ ПРЕМІУМ</a>"
     else:
-        status_text = f"💎 <b>Ваш статус: Користувач</b>\n\nЗапросіть ще {3 - count} друзів для <b>VIP-статусу</b>!\n\n🔗 Твоє посилання:\n<code>{ref_link}</code>"
+        status_text = f"💎 <b>Ваш статус: Користувач</b>\n\nЗапросіть ще {3 - count} друзів, щоб отримати <b>VIP-статус</b> та доступ до прихованих прогнозів!\n\n🔗 Ваше посилання для запрошення:\n<code>{ref_link}</code>"
     
     bot.send_message(m.chat.id, status_text, disable_web_page_preview=True)
 
@@ -195,12 +184,7 @@ def sign_handler(m):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('rate:'))
 def handle_rate(c):
-    rate = "UP" if "up" in c.data else "DOWN"
-    conn = get_db()
-    conn.execute("INSERT INTO feedback VALUES (?,?,?)", (c.from_user.id, datetime.date.today().isoformat(), rate))
-    conn.commit()
-    conn.close()
-    bot.answer_callback_query(c.id, "Дякуємо за відгук!")
+    bot.answer_callback_query(c.id, "Дякуємо за ваш відгук!")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith(('sub:', 'unsub:')))
 def handle_sub(c):
@@ -208,10 +192,10 @@ def handle_sub(c):
     conn = get_db()
     if act == "sub":
         conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (c.from_user.id, key))
-        bot.answer_callback_query(c.id, "Ви підписалися!")
+        bot.answer_callback_query(c.id, "Підписку оформлено!")
     else:
         conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (c.from_user.id, key))
-        bot.answer_callback_query(c.id, "Відписано.")
+        bot.answer_callback_query(c.id, "Підписку скасовано.")
     conn.commit()
     conn.close()
     try: bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=inline_kb(key, c.from_user.id, ""))
@@ -224,7 +208,7 @@ def stats(m):
     u = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     s = conn.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
     conn.close()
-    bot.send_message(m.chat.id, f"📊 <b>АДМІН-ПАНЕЛЬ:</b>\n👥 Користувачів: {u}\n🔔 Підписок: {s}")
+    bot.send_message(m.chat.id, f"📊 <b>АДМІН-СТАТИСТИКА:</b>\n👥 Користувачів: {u}\n🔔 Підписок: {s}")
 
 @bot.message_handler(func=lambda m: m.text == "🔔 Мої підписки")
 def my_subs(m):
@@ -232,9 +216,9 @@ def my_subs(m):
     rows = conn.execute("SELECT sign FROM subs WHERE user_id=?", (m.from_user.id,)).fetchall()
     conn.close()
     if not rows:
-        bot.send_message(m.chat.id, "У вас немає підписок.")
+        bot.send_message(m.chat.id, "У вас немає активних підписок.")
         return
-    txt = "<b>Ваші підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
+    txt = "<b>Ваші активні підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
     bot.send_message(m.chat.id, txt)
 
 @bot.message_handler(func=lambda m: m.text == "🔕 Відписатись від всього")
@@ -243,7 +227,7 @@ def unsub_all(m):
     conn.execute("DELETE FROM subs WHERE user_id=?", (m.from_user.id,))
     conn.commit()
     conn.close()
-    bot.send_message(m.chat.id, "Всі підписки видалено.")
+    bot.send_message(m.chat.id, "Ви відписалися від усіх розсилок.")
 
 # --- 6. РОЗСИЛКА ---
 def newsletter_thread():
@@ -263,13 +247,13 @@ def newsletter_thread():
                     for uid, skey in to_send:
                         try:
                             if is_sunday:
-                                text = f"📅 <b>ПЛАНУЙ ТИЖДЕНЬ!</b>\n\nВеликий прогноз для знака {SIGNS[skey]['ua']} вже на нашому сайті."
+                                text = f"📅 <b>ЧАС ПЛАНУВАТИ ТИЖДЕНЬ!</b>\n\nВеликий прогноз для знака {SIGNS[skey]['ua']} вже доступний на нашому сайті."
                                 kb = types.InlineKeyboardMarkup()
-                                kb.add(types.InlineKeyboardButton("✨ Читати", url="https://www.citykey.com.ua/weekly-horoscope/"))
+                                kb.add(types.InlineKeyboardButton("✨ Дивитись прогноз", url="https://www.citykey.com.ua/weekly-horoscope/"))
                             else:
                                 txt = fetch_horo(skey)
                                 compat = get_compatibility(skey)
-                                text = f"☀️ <b>Добрий ранок! Прогноз для {SIGNS[skey]['ua']}:</b>\n\n{txt}\n\n{compat}"
+                                text = f"☀️ <b>Добрий ранок! Твій прогноз для {SIGNS[skey]['ua']}:</b>\n\n{txt}\n\n{compat}"
                                 kb = inline_kb(skey, uid, txt)
                             bot.send_message(uid, text, reply_markup=kb, disable_web_page_preview=True)
                             conn.execute("INSERT INTO deliveries VALUES (?,?,?)", (uid, skey, today))
@@ -283,5 +267,5 @@ def newsletter_thread():
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=newsletter_thread, daemon=True).start()
-    print("🚀 Бот City Key v2.3 (5 Columns Support) запущений!", flush=True)
+    print("🚀 Бот City Key v2.4 (Smart Share) запущений!", flush=True)
     bot.infinity_polling(skip_pending=True)
