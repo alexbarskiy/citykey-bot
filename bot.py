@@ -45,7 +45,7 @@ SIGNS = {
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
-# --- 2. БАЗА ДАНИХ ---
+# --- 2. БАЗА ДАНИХ (ПІДТРИМКА 5 КОЛОНОК) ---
 def get_db():
     return sqlite3.connect(DB_NAME, timeout=30)
 
@@ -54,16 +54,36 @@ def init_db():
         db_dir = os.path.dirname(DB_NAME)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
+        
         conn = get_db()
         c = conn.cursor()
-        c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT, referrer_id INTEGER)")
+        
+        # Початкове створення (базова структура)
+        c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, date TEXT)")
         c.execute("CREATE TABLE IF NOT EXISTS subs (user_id INTEGER, sign TEXT, PRIMARY KEY (user_id, sign))")
         c.execute("CREATE TABLE IF NOT EXISTS deliveries (user_id INTEGER, sign TEXT, date TEXT, PRIMARY KEY (user_id, sign, date))")
         c.execute("CREATE TABLE IF NOT EXISTS feedback (user_id INTEGER, date TEXT, rate TEXT)")
-        conn.commit()
+        
+        # --- МІГРАЦІЯ СТРУКТУРИ ---
+        c.execute("PRAGMA table_info(users)")
+        columns = [info[1] for info in c.fetchall()]
+        
+        # Додаємо 4-ту колонку (referrer_id)
+        if 'referrer_id' not in columns:
+            print("🔧 База: додавання referrer_id", flush=True)
+            c.execute("ALTER TABLE users ADD COLUMN referrer_id INTEGER")
+            conn.commit()
+            
+        # Додаємо 5-ту колонку (username)
+        if 'username' not in columns:
+            print("🔧 База: додавання username", flush=True)
+            c.execute("ALTER TABLE users ADD COLUMN username TEXT")
+            conn.commit()
+            
         conn.close()
+        print(f"💾 База даних синхронізована (5 колонок): {DB_NAME}", flush=True)
     except Exception as e:
-        print(f"❌ Помилка бази: {e}", flush=True)
+        print(f"❌ Помилка ініціалізації бази: {e}", flush=True)
 
 # --- 3. ЛОГІКА ТРАФІКУ ---
 def get_compatibility(sign_key):
@@ -88,7 +108,7 @@ def fetch_horo(sign_key):
 def main_kb():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add(*[types.KeyboardButton(s) for s in SIGNS_UA_LIST])
-    markup.row(types.KeyboardButton("💎 VIP Статус / Друзі"), types.KeyboardButton("🔔 Мої підписки"))
+    markup.row(types.KeyboardButton("💎 VIP Статус / Друзі"), types.KeyboardButton("🔔 Мої подписки"))
     markup.row(types.KeyboardButton("🔕 Відписатись від всього"))
     return markup
 
@@ -118,6 +138,7 @@ def inline_kb(sign_key, uid, full_text_for_share):
 def start(m):
     user_id = m.from_user.id
     name = m.from_user.first_name
+    username = m.from_user.username
     referrer_id = None
     
     if len(m.text.split()) > 1:
@@ -126,13 +147,21 @@ def start(m):
             referrer_id = int(ref_candidate)
 
     conn = get_db()
-    is_new = conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone() is None
-    if is_new:
-        conn.execute("INSERT INTO users VALUES (?,?,?,?)", (user_id, name, datetime.date.today().isoformat(), referrer_id))
+    user_exists = conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
+    if not user_exists:
+        # Вказуємо конкретні назви колонок для 5 значень
+        conn.execute(
+            "INSERT INTO users (user_id, first_name, username, date, referrer_id) VALUES (?,?,?,?,?)", 
+            (user_id, name, username, datetime.date.today().isoformat(), referrer_id)
+        )
         conn.commit()
         if referrer_id:
-            try: bot.send_message(referrer_id, f"🎉 У вас новий реферал! {name} приєднався.")
+            try: bot.send_message(referrer_id, f"🎉 У вас новий реферал! {name} (@{username if username else 'без імені'}) приєднався.")
             except: pass
+    else:
+        # Оновлюємо username, якщо він змінився
+        conn.execute("UPDATE users SET username=? WHERE user_id=?", (username, user_id))
+        conn.commit()
     conn.close()
     bot.send_message(m.chat.id, f"✨ <b>Вітаю, {name}!</b> Оберіть свій знак зодіаку:", reply_markup=main_kb())
 
@@ -140,9 +169,7 @@ def start(m):
 def vip_status(m):
     user_id = m.from_user.id
     conn = get_db()
-    # Кількість рефералів
     count = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (user_id,)).fetchone()[0]
-    # Останній вибраний знак (або перший зі списку підписок) для посилання
     sub = conn.execute("SELECT sign FROM subs WHERE user_id=? LIMIT 1", (user_id,)).fetchone()
     conn.close()
     
@@ -150,14 +177,12 @@ def vip_status(m):
     ref_link = f"https://t.me/City_Key_Bot?start={user_id}"
     
     if count >= 3:
-        # Формуємо персоналізоване посилання
         encoded_name = urllib.parse.quote(m.from_user.first_name)
         encoded_sign = urllib.parse.quote(sign_ua)
         personal_vip_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
-        
-        status_text = f"🌟 <b>Ваш статус: VIP</b>\n\nВи запросили {count} друзів! Вам відкрито доступ до розширеного персонального прогнозу:\n\n👉 <a href='{personal_vip_link}'>ВІДКРИТИ ПРЕМІУМ ГОРОСКОП</a>"
+        status_text = f"🌟 <b>Ваш статус: VIP</b>\n\nВи запросили {count} друзів! Твій персональний VIP-прогноз тут:\n\n👉 <a href='{personal_vip_link}'>ВІДКРИТИ ПРЕМІУМ</a>"
     else:
-        status_text = f"💎 <b>Ваш статус: Користувач</b>\n\nЗапросіть ще {3 - count} друзів, щоб отримати <b>VIP-статус</b> та доступ до прихованих розділів сайту!\n\n🔗 Ваше посилання:\n<code>{ref_link}</code>"
+        status_text = f"💎 <b>Ваш статус: Користувач</b>\n\nЗапросіть ще {3 - count} друзів для <b>VIP-статусу</b>!\n\n🔗 Твоє посилання:\n<code>{ref_link}</code>"
     
     bot.send_message(m.chat.id, status_text, disable_web_page_preview=True)
 
@@ -183,7 +208,7 @@ def handle_sub(c):
     conn = get_db()
     if act == "sub":
         conn.execute("INSERT OR IGNORE INTO subs VALUES (?,?)", (c.from_user.id, key))
-        bot.answer_callback_query(c.id, "Підписано!")
+        bot.answer_callback_query(c.id, "Ви підписалися!")
     else:
         conn.execute("DELETE FROM subs WHERE user_id=? AND sign=?", (c.from_user.id, key))
         bot.answer_callback_query(c.id, "Відписано.")
@@ -199,7 +224,7 @@ def stats(m):
     u = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     s = conn.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
     conn.close()
-    bot.send_message(m.chat.id, f"📊 <b>АДМІН:</b> Юзерів: {u}, Підписок: {s}")
+    bot.send_message(m.chat.id, f"📊 <b>АДМІН-ПАНЕЛЬ:</b>\n👥 Користувачів: {u}\n🔔 Підписок: {s}")
 
 @bot.message_handler(func=lambda m: m.text == "🔔 Мої підписки")
 def my_subs(m):
@@ -238,9 +263,9 @@ def newsletter_thread():
                     for uid, skey in to_send:
                         try:
                             if is_sunday:
-                                text = f"📅 <b>ПЛАНУЙ ТИЖДЕНЬ!</b>\n\nМи опублікували великий прогноз на наступні 7 днів для знака {SIGNS[skey]['ua']}."
+                                text = f"📅 <b>ПЛАНУЙ ТИЖДЕНЬ!</b>\n\nВеликий прогноз для знака {SIGNS[skey]['ua']} вже на нашому сайті."
                                 kb = types.InlineKeyboardMarkup()
-                                kb.add(types.InlineKeyboardButton("✨ Читати на тиждень", url="https://www.citykey.com.ua/weekly-horoscope/"))
+                                kb.add(types.InlineKeyboardButton("✨ Читати", url="https://www.citykey.com.ua/weekly-horoscope/"))
                             else:
                                 txt = fetch_horo(skey)
                                 compat = get_compatibility(skey)
@@ -258,5 +283,5 @@ def newsletter_thread():
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=newsletter_thread, daemon=True).start()
-    print("🚀 Бот City Key v2.1 запущений!", flush=True)
+    print("🚀 Бот City Key v2.3 (5 Columns Support) запущений!", flush=True)
     bot.infinity_polling(skip_pending=True)
