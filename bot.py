@@ -31,7 +31,7 @@ TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DB_NAME = "stats.db" 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# Шаблон VIP-посилання (замініть на вашу сторінку)
+# Шаблон VIP-посилання
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
 
 if not TOKEN:
@@ -166,11 +166,21 @@ def vip_status(m):
     sub = conn.execute("SELECT sign FROM subs WHERE user_id=? LIMIT 1", (uid,)).fetchone()
     conn.close()
     
-    sign_ua = SIGNS[sub[0]]["ua"] if sub else "Horoscope"
-    if count >= 3 or uid == ADMIN_ID:
+    is_admin = (ADMIN_ID != 0 and uid == ADMIN_ID)
+    if count >= 3 or is_admin:
+        # ПРАВИЛЬНЕ ФОРМУВАННЯ ПОСИЛАННЯ (З АНГЛІЙСЬКИМ КЛЮЧЕМ)
+        sign_key = sub[0] if sub else 'aries'
         encoded_name = urllib.parse.quote(m.from_user.first_name)
-        link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=sign_ua)
-        bot.send_message(m.chat.id, f"🌟 <b>Ваш статус: VIP!</b>\n\nВи запросили {count} друзів. Доступ відкрито:\n\n👉 <a href='{link}'>ВІДКРИТИ ПРЕМІУМ</a>")
+        encoded_sign = urllib.parse.quote(sign_key) 
+        
+        personal_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
+        
+        bot.send_message(
+            m.chat.id,
+            f"🌟 <b>ВАШ СТАТУС: VIP</b>\n\nВи запросили {count} друзів! "
+            f"Твій персональний VIP-прогноз тут:\n\n👉 <a href='{personal_link}'>ВІДКРИТИ ПРЕМІУМ</a>",
+            disable_web_page_preview=True
+        )
     else:
         ref_link = f"https://t.me/City_Key_Bot?start={uid}"
         bot.send_message(m.chat.id, f"💎 Запросіть ще {3-count} друзів для VIP!\n\n🔗 Твоє посилання:\n<code>{ref_link}</code>")
@@ -237,7 +247,7 @@ if __name__ == "__main__":
     # Запуск розсилки
     threading.Thread(target=newsletter_thread, daemon=True).start()
     
-    print("🚀 Бот City Key v4.0 (Render Full) запущений!", flush=True)
+    print("🚀 Бот City Key v4.1 (VIP Fix) запущений!", flush=True)
     while True:
         try:
             bot.polling(none_stop=True, timeout=60)
