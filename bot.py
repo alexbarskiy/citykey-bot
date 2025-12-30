@@ -19,7 +19,7 @@ DB_NAME = os.getenv("DB_PATH", "data/stats.db")
 
 # ВСТАВТЕ СВІЙ ID ТУТ! (Обов'язково для тестування VIP без друзів)
 # Отримати ID можна у бота @userinfobot
-ADMIN_ID = 0  
+ADMIN_ID = 564858074  
 
 # Шаблон VIP-посилання
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
@@ -287,3 +287,4 @@ if __name__ == "__main__":
     threading.Thread(target=newsletter_thread, daemon=True).start()
     print("🚀 Бот City Key v2.8 (Admin Test) запущений!", flush=True)
     bot.infinity_polling(skip_pending=True)
+
