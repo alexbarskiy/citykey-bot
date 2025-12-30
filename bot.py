@@ -16,6 +16,10 @@ TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 # Шлях до бази даних (Railway Volume)
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
 
+# ВАЖЛИВО: Вставте сюди свій Telegram ID (числовий), щоб тільки ви бачили статистику
+# Дізнатися свій ID можна у бота @userinfobot
+ADMIN_ID = 564858074  # Замініть на ваш ID, наприклад: 123456789
+
 if not TOKEN:
     print("❌ КРИТИЧНО: TOKEN не знайдено!", flush=True)
     sys.exit(1)
@@ -120,6 +124,33 @@ def cmd_start(m):
         f"✨ <b>Вітаю, {m.from_user.first_name}!</b>\n\nОберіть свій знак зодіаку:", 
         reply_markup=main_keyboard()
     )
+
+# НОВА КОМАНДА СТАТИСТИКИ
+@bot.message_handler(commands=['stats'])
+def cmd_stats(m):
+    # Перевірка, чи це адмін (якщо ви вказали ADMIN_ID вище)
+    if ADMIN_ID != 0 and m.from_user.id != ADMIN_ID:
+        return # Ігноруємо команду від сторонніх
+
+    try:
+        conn = get_db()
+        # Загальна кількість людей, які хоч раз натиснули /start
+        total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        # Кількість активних підписок (одна людина може мати кілька)
+        total_subs = conn.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
+        # Кількість унікальних підписників
+        unique_subscribers = conn.execute("SELECT COUNT(DISTINCT user_id) FROM subs").fetchone()[0]
+        conn.close()
+
+        text = (
+            "📊 <b>Статистика бота:</b>\n\n"
+            f"👥 Всього користувачів (база): {total_users}\n"
+            f"🔔 Унікальних підписників: {unique_subscribers}\n"
+            f"📈 Всього активних підписок: {total_subs}"
+        )
+        bot.send_message(m.chat.id, text)
+    except Exception as e:
+        bot.send_message(m.chat.id, f"Помилка при отриманні статистики: {e}")
 
 @bot.message_handler(func=lambda m: m.text in UA_TO_KEY)
 def handle_sign(m):
