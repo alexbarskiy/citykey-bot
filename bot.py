@@ -12,7 +12,8 @@ import random
 import urllib.parse
 from telebot import types
 
-# --- 1. НАЛАШТУВАННЯ ---
+# --- 1. НАЛАШТУВАННЯ ТА ПЕРЕВІРКА ---
+# Пріоритет на FINAL_BOT_TOKEN для уникнення кешування
 TOKEN_RAW = os.getenv("FINAL_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DB_NAME = os.getenv("DB_PATH", "data/stats.db")
@@ -24,23 +25,29 @@ ADMIN_ID = 0
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
 
 if not TOKEN:
-    print("❌ КРИТИЧНО: TOKEN не знайдено в системних змінних Railway!", flush=True)
+    print("❌ КРИТИЧНО: TOKEN не знайдено!", flush=True)
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# Покращена перевірка з'єднання з ретраями
-def verify_connection(retries=5, delay=5):
-    print(f"📡 Перевірка зв'язку з Telegram (спроб: {retries})...", flush=True)
+# Покращена перевірка з'єднання (15 спроб протягом 150 секунд)
+def verify_connection(retries=15, delay=10):
+    print(f"📡 [STARTUP] Очікування мережі та зв'язку з Telegram (спроб: {retries})...", flush=True)
     for i in range(retries):
         try:
+            # Спроба простого запису в Google для перевірки наявності інтернету взагалі
+            requests.get("https://google.com", timeout=5)
+            # Якщо інтернет є, перевіряємо токен
             me = bot.get_me()
-            print(f"✅ ПІДКЛЮЧЕНО: @{me.username}", flush=True)
+            print(f"✅ [ONLINE] Бот @{me.username} підключений успішно!", flush=True)
             return True
+        except requests.exceptions.ConnectionError as ce:
+            print(f"⚠️ [RETRY {i+1}/{retries}] Мережа ще не доступна (Errno 101/111). Чекаємо {delay} сек...", flush=True)
         except Exception as e:
-            print(f"⚠️ Спроба {i+1}/{retries} не вдалася: {e}", flush=True)
-            if i < retries - 1:
-                time.sleep(delay)
+            print(f"⚠️ [RETRY {i+1}/{retries}] Telegram API недоступний: {e}", flush=True)
+        
+        if i < retries - 1:
+            time.sleep(delay)
     return False
 
 SIGNS = {
@@ -281,29 +288,22 @@ def newsletter_thread():
             time.sleep(1800)
         except: time.sleep(60)
 
-def heartbeat_thread():
-    while True:
-        try:
-            print(f"💓 Heartbeat: {datetime.datetime.now().strftime('%H:%M:%S')}", flush=True)
-        except: pass
-        time.sleep(300)
-
 if __name__ == "__main__":
     init_db()
     
-    # Спроба підключитися 5 разів з паузою 10 секунд
-    if not verify_connection(retries=5, delay=10):
-        print("🛑 СТОП: Мережа Telegram недоступна після 5 спроб. Спробуйте Redeploy.", flush=True)
+    # Максимально агресивні ретраї для боротьби з Errno 101
+    if not verify_connection(retries=15, delay=10):
+        print("🛑 СТОП: Мережа недоступна. Railway не надав інтернет контейнеру.", flush=True)
         sys.exit(1)
         
     threading.Thread(target=newsletter_thread, daemon=True).start()
-    threading.Thread(target=heartbeat_thread, daemon=True).start()
     
-    print("🚀 Бот City Key v3.1 запущений!", flush=True)
+    print("🚀 Бот City Key v3.2 запущений успішно!", flush=True)
     
     while True:
         try:
             bot.polling(none_stop=True, timeout=90, long_polling_timeout=90)
         except Exception as e:
-            print(f"⚠️ Polling error: {e}", flush=True)
-            time.sleep(5)
+            # Якщо мережа "відвалилася" під час роботи, чекаємо і пробуємо знову
+            print(f"⚠️ [POLLING ERROR] {e}. Перезапуск через 10 сек...", flush=True)
+            time.sleep(10)
