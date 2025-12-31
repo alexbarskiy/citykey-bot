@@ -13,36 +13,35 @@ import urllib.parse
 from flask import Flask
 from telebot import types
 
-# --- 1. ВЕБ-СЕРВЕР ДЛЯ "ПРОБУДЖЕННЯ" (RENDER) ---
+# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER (KEEP-ALIVE) ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    # Цей текст ви побачите, якщо перейдете за посиланням вашого бота в браузері
-    return "City Key Bot is Active! 🚀", 200
+    return "City Key Bot is Online and Functional! 🚀", 200
 
 @app.route('/ping')
 def ping():
-    # Спеціальний шлях для cron-job.org
-    print(f"💓 ПІНГ: Отримано сигнал пробудження о {datetime.datetime.now().strftime('%H:%M:%S')}", flush=True)
     return "PONG", 200
 
 def run_flask():
-    # Render автоматично призначає порт у змінну PORT
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. НАЛАШТУВАННЯ ТА ТОКЕН ---
+# --- 2. НАЛАШТУВАННЯ ---
 TOKEN_RAW = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or ""
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DB_NAME = "stats.db" 
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+# Перетворюємо на int, якщо змінна порожня - ставимо 0
+try:
+    ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+except:
+    ADMIN_ID = 0
 
-# Шаблон VIP-посилання
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
 
 if not TOKEN:
-    print("❌ КРИТИЧНО: TOKEN не знайдено! Перевірте вкладку Environment на Render.", flush=True)
+    print("❌ КРИТИЧНО: TOKEN не знайдено!", flush=True)
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
@@ -66,7 +65,6 @@ SIGNS = {
 SIGNS_UA_LIST = [f'{v["emoji"]} {v["ua"]}' for v in SIGNS.values()]
 UA_TO_KEY = {f'{v["emoji"]} {v["ua"]}': k for k, v in SIGNS.items()}
 
-# Кнопки меню
 BTN_MY_SUBS = "🔔 Мої підписки"
 BTN_VIP_STATUS = "💎 VIP Статус / Друзі"
 BTN_UNSUB_ALL = "🔕 Відписатись від всього"
@@ -81,12 +79,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- 5. ЛОГІКА КОНТЕНТУ ---
-def get_compatibility(sign_key):
-    random.seed(int(datetime.date.today().strftime("%Y%m%d")) + len(sign_key))
-    compat_key = random.choice(list(SIGNS.keys()))
-    return f"💖 <b>Сумісність дня:</b> найкраще взаємодіяти з <b>{SIGNS[compat_key]['ua']}</b>"
-
+# --- 5. КОНТЕНТ ТА ПАРСИНГ ---
 def fetch_horo(sign_key):
     url = f'https://www.citykey.com.ua/{SIGNS[sign_key]["slug"]}/'
     try:
@@ -95,9 +88,14 @@ def fetch_horo(sign_key):
         content = soup.select_one(".entry-content")
         p = content.find_all("p") if content else []
         txt = " ".join([i.get_text().strip() for i in p if len(i.get_text()) > 25][:2])
-        return (txt[:500] + "...") if len(txt) > 500 else (txt or "Прогноз уже на сайті.")
+        return (txt[:500] + "...") if len(txt) > 500 else (txt or "Читати далі на сайті.")
     except:
-        return "Детальний прогноз уже на сайті citykey.com.ua"
+        return "Прогноз уже опубліковано на сайті citykey.com.ua!"
+
+def get_compatibility(sign_key):
+    random.seed(int(datetime.date.today().strftime("%Y%m%d")) + len(sign_key))
+    compat_key = random.choice(list(SIGNS.keys()))
+    return f"💖 <b>Сумісність дня:</b> найкраще взаємодіяти з <b>{SIGNS[compat_key]['ua']}</b>"
 
 # --- 6. КЛАВІАТУРИ ---
 def main_kb():
@@ -129,7 +127,7 @@ def inline_kb(sign_key, uid, text_share):
     )
     return markup
 
-# --- 7. ОБРОБНИКИ ---
+# --- 7. ХЕНДЛЕРИ ---
 @bot.message_handler(commands=['start'])
 def start(m):
     user_id = m.from_user.id
@@ -144,15 +142,54 @@ def start(m):
                  (user_id, m.from_user.first_name, datetime.date.today().isoformat(), ref_id))
     conn.commit()
     conn.close()
-    bot.send_message(m.chat.id, f"✨ <b>Вітаю, {m.from_user.first_name}!</b>\nОберіть свій знак зодіаку:", reply_markup=main_kb())
+    bot.send_message(m.chat.id, f"✨ <b>Вітаю, {m.from_user.first_name}!</b>\nЯ твій астрологічний бот City Key.", reply_markup=main_kb())
+
+# ПРАВКА ТУТ: Покращений обробник статистики
+@bot.message_handler(commands=['stats'])
+def admin_stats(m):
+    print(f"DEBUG: /stats request from {m.from_user.id}. Admin is set to {ADMIN_ID}", flush=True)
+    if m.from_user.id != ADMIN_ID:
+        bot.send_message(m.chat.id, f"🚫 Доступ обмежено.\nВаш ID: <code>{m.from_user.id}</code>\nID адміна в системі: <code>{ADMIN_ID}</code>")
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        u_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        s_count = conn.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
+        conn.close()
+        bot.send_message(m.chat.id, f"📊 <b>Статистика:</b>\n\nКористувачів: {u_count}\nАктивних підписок: {s_count}")
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ Помилка БД: {e}")
 
 @bot.message_handler(func=lambda m: m.text in UA_TO_KEY)
 def send_horo(m):
     key = UA_TO_KEY[m.text]
-    bot.send_chat_action(m.chat.id, 'typing')
     txt = fetch_horo(key)
     compat = get_compatibility(key)
     bot.send_message(m.chat.id, f"✨ <b>{m.text}</b>\n\n{txt}\n\n{compat}", reply_markup=inline_kb(key, m.from_user.id, txt), disable_web_page_preview=True)
+
+@bot.message_handler(func=lambda m: BTN_VIP_STATUS in m.text or "vip" in m.text.lower())
+def vip_status(m):
+    uid = m.from_user.id
+    conn = sqlite3.connect(DB_NAME)
+    count = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (uid,)).fetchone()[0]
+    sub = conn.execute("SELECT sign FROM subs WHERE user_id=? LIMIT 1", (uid,)).fetchone()
+    conn.close()
+    
+    if count >= 3 or uid == ADMIN_ID:
+        sign_key = sub[0] if sub else 'aries'
+        encoded_name = urllib.parse.quote(m.from_user.first_name)
+        encoded_sign = urllib.parse.quote(sign_key)
+        personal_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
+        
+        bot.send_message(
+            m.chat.id, 
+            f"🌟 <b>ВАШ СТАТУС: VIP</b>\n\nВи запросили {count} друзів! Ваш персональний VIP-прогноз тут:\n\n👉 <a href='{personal_link}'>ВІДКРИТИ ПРЕМІУМ</a>",
+            disable_web_page_preview=True
+        )
+    else:
+        ref_link = f"https://t.me/City_Key_Bot?start={uid}"
+        bot.send_message(m.chat.id, f"💎 Запросіть ще {3-count} друзів для VIP!\n\n🔗 Твоє посилання:\n<code>{ref_link}</code>")
 
 @bot.message_handler(func=lambda m: BTN_MY_SUBS in m.text or "підписки" in m.text.lower())
 def my_subs(m):
@@ -165,32 +202,7 @@ def my_subs(m):
         txt = "<b>Ваші підписки:</b>\n" + "\n".join([f"- {SIGNS[r[0]]['emoji']} {SIGNS[r[0]]['ua']}" for r in rows if r[0] in SIGNS])
         bot.send_message(m.chat.id, txt)
 
-@bot.message_handler(func=lambda m: BTN_VIP_STATUS in m.text or "vip" in m.text.lower())
-def vip_status(m):
-    uid = m.from_user.id
-    conn = sqlite3.connect(DB_NAME)
-    count = conn.execute("SELECT COUNT(*) FROM users WHERE referrer_id=?", (uid,)).fetchone()[0]
-    sub = conn.execute("SELECT sign FROM subs WHERE user_id=? LIMIT 1", (uid,)).fetchone()
-    conn.close()
-    
-    is_admin = (ADMIN_ID != 0 and uid == ADMIN_ID)
-    if count >= 3 or is_admin:
-        sign_key = sub[0] if sub else 'aries'
-        encoded_name = urllib.parse.quote(m.from_user.first_name)
-        encoded_sign = urllib.parse.quote(sign_key) 
-        personal_link = VIP_LINK_TEMPLATE.format(name=encoded_name, sign=encoded_sign)
-        
-        bot.send_message(
-            m.chat.id,
-            f"🌟 <b>ВАШ СТАТУС: VIP</b>\n\nВи запросили {count} друзів! "
-            f"Твій персональний VIP-прогноз тут:\n\n👉 <a href='{personal_link}'>ВІДКРИТИ ПРЕМІУМ</a>",
-            disable_web_page_preview=True
-        )
-    else:
-        ref_link = f"https://t.me/City_Key_Bot?start={uid}"
-        bot.send_message(m.chat.id, f"💎 Запросіть ще {3-count} друзів для VIP!\n\n🔗 Твоє посилання:\n<code>{ref_link}</code>")
-
-@bot.message_handler(func=lambda m: BTN_UNSUB_ALL in m.text or "відписатись" in m.text.lower())
+@bot.message_handler(func=lambda m: BTN_UNSUB_ALL in m.text)
 def unsub_all(m):
     conn = sqlite3.connect(DB_NAME)
     conn.execute("DELETE FROM subs WHERE user_id=?", (m.from_user.id,))
@@ -217,8 +229,7 @@ def newsletter_thread():
     while True:
         try:
             now = datetime.datetime.now()
-            if now.hour == 7: 
-                is_sunday = now.weekday() == 6
+            if now.hour == 7: # 09:00 за Києвом
                 today = now.strftime("%Y-%m-%d")
                 conn = sqlite3.connect(DB_NAME)
                 to_send = conn.execute("""
@@ -226,22 +237,16 @@ def newsletter_thread():
                     LEFT JOIN deliveries d ON s.user_id = d.user_id AND s.sign = d.sign AND d.date = ?
                     WHERE d.user_id IS NULL
                 """, (today,)).fetchall()
-                if to_send:
-                    for uid, skey in to_send:
-                        try:
-                            if is_sunday:
-                                text = f"📅 <b>Час планувати тиждень!</b>\nПрогноз для {SIGNS[skey]['ua']} вже на сайті."
-                                kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("📖 Читати", url="https://www.citykey.com.ua/weekly-horoscope/"))
-                            else:
-                                txt = fetch_horo(skey)
-                                text = f"☀️ <b>Твій прогноз на сьогодні ({SIGNS[skey]['ua']}):</b>\n\n{txt}"
-                                kb = inline_kb(skey, uid, txt)
-                            bot.send_message(uid, text, reply_markup=kb, disable_web_page_preview=True)
-                            conn.execute("INSERT INTO deliveries VALUES (?,?,?)", (uid, skey, today))
-                            conn.commit()
-                        except: pass
+                
+                for uid, skey in to_send:
+                    try:
+                        txt = fetch_horo(skey)
+                        bot.send_message(uid, f"☀️ <b>Твій прогноз на сьогодні ({SIGNS[skey]['ua']}):</b>\n\n{txt}", reply_markup=inline_kb(skey, uid, txt))
+                        conn.execute("INSERT INTO deliveries VALUES (?,?,?)", (uid, skey, today))
+                        conn.commit()
+                    except: pass
                 conn.close()
-            time.sleep(1800)
+            time.sleep(3600)
         except: time.sleep(60)
 
 # --- 9. ЗАПУСК ---
@@ -250,10 +255,10 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=newsletter_thread, daemon=True).start()
     
-    print("🚀 Бот City Key v4.2 (Render Alive) запущений!", flush=True)
+    print("🚀 City Key v4.4 Full Functional is Online!", flush=True)
     while True:
         try:
             bot.polling(none_stop=True, timeout=60)
         except Exception as e:
-            print(f"Polling error: {e}", flush=True)
+            print(f"Error: {e}", flush=True)
             time.sleep(15)
