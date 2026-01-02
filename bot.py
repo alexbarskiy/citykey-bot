@@ -183,6 +183,73 @@ def admin_stats(m):
     conn.close()
     bot.send_message(m.chat.id, f"📊 <b>Статистика (Supabase):</b>\n\nЮзерів: {u_count}\nАктивних підписок: {s_count}")
 
+def _get_all_sub_users():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT user_id FROM subs")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [r[0] for r in rows]
+
+@bot.message_handler(commands=['post'])
+def admin_post(m):
+    if m.from_user.id != ADMIN_ID:
+        bot.send_message(m.chat.id, f"🚫 Доступ лише для адміна. Ваш ID: {m.from_user.id}")
+        return
+
+    raw = m.text or ""
+    text = raw.replace("/post", "", 1).strip()
+
+    if not text:
+        bot.send_message(m.chat.id, "Напиши так: /post твій текст")
+        return
+
+    users = _get_all_sub_users()
+    sent = 0
+
+    for uid in users:
+        try:
+            bot.send_message(uid, text, disable_web_page_preview=True)
+            sent += 1
+        except:
+            pass
+
+    bot.send_message(m.chat.id, f"Готово. Відправлено: {sent}")
+
+@bot.message_handler(commands=['post_compat'])
+def admin_post_compat(m):
+    if m.from_user.id != ADMIN_ID:
+        bot.send_message(m.chat.id, f"🚫 Доступ лише для адміна. Ваш ID: {m.from_user.id}")
+        return
+
+    url = "https://www.citykey.com.ua/test%2Dna%2Dsumisnist%2Dznakiv%2Dzodiaku/"
+    hook_list = [
+    "Іноді в середині дня стає зрозуміло, з ким легко, а з ким виникає напруга буквально з дрібниць. "
+    "У такі моменти цікаво подивитись не на слова, а на поєднання характерів. "
+    "Я сьогодні заглянув у тест на сумісність і він несподівано добре пояснює такі речі.",
+    "Обідня перерва — цікавий момент для невеликого експерименту. Дві хвилини уваги можуть дати несподіваний інсайт про взаємодію з людьми.",
+    "Іноді хочеться чесного натяку на вашу динаміку без зайвих слів. У таких випадках цікаво просто подивитись, як сходяться знаки у парі."
+]
+
+    text = random.choice(hook_list)
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Перевірити сумісність", url=url))
+
+    users = _get_all_sub_users()
+    sent = 0
+
+    for uid in users:
+        try:
+            bot.send_message(uid, text, reply_markup=kb, disable_web_page_preview=True)
+            sent += 1
+        except:
+            pass
+
+    bot.send_message(m.chat.id, f"Готово. Відправлено: {sent}")
+
+
 @bot.message_handler(func=lambda m: m.text in UA_TO_KEY)
 def send_horo(m):
     key = UA_TO_KEY[m.text]
@@ -304,5 +371,6 @@ if __name__ == "__main__":
             bot.polling(none_stop=True, timeout=90)
         except Exception as e:
             time.sleep(15)
+
 
 
