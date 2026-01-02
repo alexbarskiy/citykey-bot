@@ -124,7 +124,7 @@ def get_compatibility(sign_key):
 def main_kb():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add(*[types.KeyboardButton(f'{v["emoji"]} {v["ua"]}') for v in SIGNS.values()])
-    markup.row(types.KeyboardButton("💎 VIP Статус / Друзі"), types.KeyboardButton("🔔 Мої підписки"))
+    markup.row(types.KeyboardButton("💎 VIP Кімната"), types.KeyboardButton("🔔 Мої підписки"))
     markup.row(types.KeyboardButton("🔕 Відписатись від всього"))
     return markup
 
@@ -304,3 +304,4 @@ if __name__ == "__main__":
             bot.polling(none_stop=True, timeout=90)
         except Exception as e:
             time.sleep(15)
+
