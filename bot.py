@@ -32,7 +32,7 @@ def run_flask():
 TOKEN_RAW = os.getenv("BOT_TOKEN") or ""
 TOKEN = re.sub(r'[^a-zA-Z0-9:_]', '', TOKEN_RAW).strip()
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "564858074"))
 
 VIP_LINK_TEMPLATE = "https://www.citykey.com.ua/city-key-horoscope/index.html?u={name}&s={sign}"
 
@@ -304,4 +304,5 @@ if __name__ == "__main__":
             bot.polling(none_stop=True, timeout=90)
         except Exception as e:
             time.sleep(15)
+
 
