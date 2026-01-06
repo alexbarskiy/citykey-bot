@@ -223,7 +223,7 @@ def admin_post_compat(m):
         bot.send_message(m.chat.id, f"🚫 Доступ лише для адміна. Ваш ID: {m.from_user.id}")
         return
 
-    url = "https://www.citykey.com.ua/test%2Dna%2Dsumisnist%2Dznakiv%2Dzodiaku/"
+    url = "https://www.citykey.com.ua/test-na-sumisnist-znakiv-zodiaku/"
     hook_list = [
     "Іноді в середині дня стає зрозуміло, з ким легко, а з ким виникає напруга буквально з дрібниць. "
     "У такі моменти цікаво подивитись не на слова, а на поєднання характерів. "
@@ -366,11 +366,19 @@ if __name__ == "__main__":
     threading.Thread(target=newsletter_thread, daemon=True).start()
     
     print("🚀 City Key v5.3 Full persistent online!", flush=True)
-    while True:
-        try:
-            bot.polling(none_stop=True, timeout=90)
-        except Exception as e:
-            time.sleep(15)
+
+try:
+    bot.remove_webhook()
+except Exception:
+    pass
+
+while True:
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"❌ Polling error: {e}", flush=True)
+        time.sleep(5)
+
 
 
 
