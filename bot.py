@@ -332,7 +332,7 @@ def newsletter_thread():
         try:
             now = datetime.datetime.now()
             # 07:00 UTC = 09:00 за Києвом
-            if now.hour == 7:
+            if True:
                 today = now.strftime("%Y-%m-%d")
                 conn = get_db_connection()
                 cur = conn.cursor()
